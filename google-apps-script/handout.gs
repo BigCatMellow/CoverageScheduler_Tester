@@ -1,4 +1,4 @@
-const FIELD_TRIP_HANDOUT_MODULE_VERSION = 2;
+const FIELD_TRIP_HANDOUT_MODULE_VERSION = 3;
 
 function createCoverageHandoutDocWideFromLatestPreview_() {
   const preview = getLatestPreview_();
@@ -302,7 +302,17 @@ function removeTrailingUnusedFieldTripForm_(body) {
 
   if (startIndex === -1) return;
 
-  for (let i = body.getNumChildren() - 1; i >= startIndex; i--) {
+  // Google Docs requires every document section to retain a final paragraph.
+  // The unused second form can include that required paragraph, so deleting
+  // every child from the form heading through EOF throws:
+  // "Cannot remove the last paragraph in a document section."
+  //
+  // Append our own empty terminal paragraph first, keep it, then remove the
+  // entire unused form above it.
+  body.appendParagraph('');
+  const terminalParagraphIndex = body.getNumChildren() - 1;
+
+  for (let i = terminalParagraphIndex - 1; i >= startIndex; i--) {
     body.removeChild(body.getChild(i));
   }
 }
