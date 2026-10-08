@@ -233,6 +233,17 @@ assert(
   fieldTripBuilder.includes('body.getTables().length !== formUnits.length'),
   'field-trip handout generation must verify that every form produced exactly one table'
 );
+assert(
+  fieldTripBuilder.includes('removeGeneratedFieldTripStarterParagraph_(body)'),
+  'field-trip handouts must remove the empty starter paragraph from a newly created Doc'
+);
+
+const starterCleanup = functionBody(sources['handout.gs'], 'removeGeneratedFieldTripStarterParagraph_');
+assert(
+  starterCleanup.includes('body.getChild(0)') &&
+  starterCleanup.includes('body.removeChild(first)'),
+  'starter cleanup must target only the initial empty paragraph'
+);
 
 const fieldTripForm = functionBody(sources['handout.gs'], 'appendGeneratedFieldTripForm_');
 assert(
