@@ -66,6 +66,9 @@ function setupCoverageWorkbookFromTeacherSchedule() {
   seedConfig_();
   applyDataValidation_();
   hideHelperSheets_();
+  if (typeof markTeacherScheduleCacheDirty_ === 'function') {
+    markTeacherScheduleCacheDirty_();
+  }
   if (typeof markFieldTripCoveragePoolDirty_ === 'function') {
     markFieldTripCoveragePoolDirty_();
   }
