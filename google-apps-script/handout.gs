@@ -163,11 +163,7 @@ function validateFieldTripFormTemplate_(body) {
 
 function buildFieldTripFormContext_(date, day) {
   const config = getConfigMap_();
-  const teacherSchedule = filterTeacherScheduleForDate_(
-    readSheetObjects_('Teacher Schedule'),
-    date,
-    config
-  )
+  const teacherSchedule = teacherScheduleRowsForDate_(date, day, config)
     .map(row => normalizeTeacherScheduleRow_(row))
     .filter(row => row.day === day && row.staffName);
 

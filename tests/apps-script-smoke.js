@@ -90,6 +90,39 @@ assert(
   'latest-preview handout creation must revalidate before printing'
 );
 
+const generatePreview = functionBody(sources['scheduler.gs'], 'generateCoveragePreview');
+assert(
+  !generatePreview.includes("'Teacher Schedule'"),
+  'Generate must not preload or read the full Teacher Schedule'
+);
+assert(
+  generatePreview.includes('teacherScheduleRowsForDate_'),
+  'Generate must use the prepared weekday schedule cache'
+);
+
+const liveContext = functionBody(sources['scheduler.gs'], 'buildCoverageLiveContext_');
+assert(
+  liveContext.includes('teacherScheduleRowsForDate_'),
+  'save/manual validation must use the weekday schedule cache'
+);
+
+const dayCacheReader = functionBody(sources['scheduler.gs'], 'readTeacherScheduleDayCached_');
+assert(
+  dayCacheReader.includes('rebuildTeacherScheduleDayCache_'),
+  'weekday schedule cache must self-heal when stale'
+);
+
+const dayCacheBuilder = functionBody(sources['scheduler.gs'], 'rebuildTeacherScheduleDayCache_');
+assert(
+  dayCacheBuilder.includes("Math.min(8, sheet.getLastColumn())") ||
+  sources['scheduler.gs'].includes("Math.min(8, sheet.getLastColumn())"),
+  'schedule cache source read must exclude the unused Lead/Co formula column'
+);
+assert(
+  dayCacheBuilder.includes('normalizeTeacherScheduleRow_'),
+  'weekday caches must store prepared/derived schedule data'
+);
+
 const poolRefresh = functionBody(sources['scheduler.gs'], 'ensureFieldTripCoveragePoolFresh_');
 assert(
   poolRefresh.includes('withCoverageLock_'),

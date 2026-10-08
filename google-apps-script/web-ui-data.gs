@@ -63,11 +63,7 @@ function getWebStaffSchedule_(staffName, date, dayCode) {
   const dateKey = normalizeDateKey_(date);
   const day = String(dayCode || guessDayCodeFromDate_(dateKey) || '').trim();
 
-  const rows = filterTeacherScheduleForDate_(
-    readSheetObjects_('Teacher Schedule'),
-    dateKey,
-    config
-  )
+  const rows = teacherScheduleRowsForDate_(dateKey, day, config)
     .map(row => normalizeTeacherScheduleRow_(row))
     .filter(row =>
       (!day || row.day === day) &&
@@ -121,7 +117,10 @@ function getWebStaffRoster_(dayCode) {
     rosterNames.push(name);
   });
 
-  const scheduleRows = readSheetObjects_('Teacher Schedule')
+  const scheduleSource = dayCode
+    ? readTeacherScheduleDayCached_(dayCode)
+    : readSheetObjects_('Teacher Schedule');
+  const scheduleRows = scheduleSource
     .map(row => normalizeTeacherScheduleRow_(row))
     .filter(row => !dayCode || row.day === String(dayCode).trim());
 
