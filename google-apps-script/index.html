@@ -137,8 +137,8 @@
 <div id="blockModal" class="overlay hidden"><div class="modal modal-lg"><div class="m-hd"><h2>Reassign Block</h2><button class="m-x" data-close="blockModal">×</button></div><div class="m-body"><div id="blockInfo" class="block-info"></div><div class="fg"><label class="fl">Assign Coverage To</label><select id="blockCoverage" class="fs"></select><div id="blockCoverageHint" class="hint">Only staff who are actually available for this exact block will appear.</div><div id="blockCoverageSchedule" class="mini-tl"></div></div></div><div class="m-ft"><div class="sp-r"></div><button class="btn-cancel" data-close="blockModal">Cancel</button><button id="saveBlockBtn" class="btn-save">Save Assignment</button></div></div></div>
 
 <script>
-const REQUIRED_WEB_API_VERSION=12;
-const S={date:'',day:'',allStaff:[],coverage:[],fieldTripCoverage:[],absences:[],fieldTrips:[],plan:[],view:'timeline',generating:false,editingAbsence:null,editingAbsenceIndex:null,editingCoverage:null,editingBlock:null,blockSchedules:{},pendingDelete:null,scheduleCache:{},schedulePromises:{}};
+const REQUIRED_WEB_API_VERSION=13;
+const S={date:'',day:'',allStaff:[],coverage:[],fieldTripCoverage:[],absences:[],fieldTrips:[],plan:[],view:'timeline',generating:false,editingAbsence:null,editingAbsenceIndex:null,editingCoverage:null,editingBlock:null,blockSchedules:{},blockChoiceResult:null,manualWorkspace:null,pendingDelete:null,scheduleCache:{},schedulePromises:{}};
 const $=id=>document.getElementById(id);
 const DAY_NAMES={M:'Monday',T:'Tuesday',W:'Wednesday',R:'Thursday',F:'Friday'};
 const esc=value=>String(value==null?'':value).replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
@@ -334,6 +334,8 @@ async function bootstrap(date){
     if(Array.isArray(data.allStaff))S.allStaff=data.allStaff;
     S.coverage=data.allCoverageStaff||[];
     S.fieldTripCoverage=[];
+    S.manualWorkspace=null;
+    S.blockChoiceResult=null;
     S.absences=normalizeAbsences(data.currentAbsences||[]);
     S.fieldTrips=data.currentFieldTrips||[];
     S.plan=(data.currentPreview&&data.currentPreview.rows)||[];
@@ -521,14 +523,14 @@ async function openAbsence(index){populateAbsenceStaff();const hasIndex=index!=n
 function setAbsenceType(type){document.querySelectorAll('#absenceTypes .t-opt').forEach(b=>b.classList.toggle('sel',b.dataset.type===type));$('partialTimes').classList.toggle('hidden',type!=='Partial Day');$('absenceTypes').dataset.selected=type;if(type==='Partial Day')updateAbsenceScheduleControls(true)}
 async function saveAbsence(){const staffName=$('absenceStaff').value;if(!staffName){flash('Choose a staff member.','warn');return}const type=$('absenceTypes').dataset.selected||'Full Day';const next={staffName,absenceType:type==='Emergency'?'Full Day':type,allDay:type!=='Partial Day',emergency:type==='Emergency',startOverride:type==='Partial Day'?$('absenceStart').value.trim():'',endOverride:type==='Partial Day'?$('absenceEnd').value.trim():'',preferredCoverage:$('preferredCoverage').value,notes:$('absenceNotes').value.trim()};if(type==='Partial Day'&&(!next.startOverride||!next.endOverride)){flash('Enter both a start and end time for a partial-day absence.','warn');return}const list=S.absences.slice();if(S.editingAbsenceIndex!=null&&list[S.editingAbsenceIndex]){list[S.editingAbsenceIndex]=next}else{list.push(next)}await persistAbsences(list);closeModal('absenceModal')}
 async function removeAbsence(){if(S.editingAbsenceIndex==null)return;await persistAbsences(S.absences.filter((a,i)=>i!==S.editingAbsenceIndex));closeModal('absenceModal')}
-async function persistAbsences(list){try{const result=await gas('webSaveAbsences',{date:S.date,day:S.day,absences:list});S.absences=normalizeAbsences(result||[]);S.plan=[];renderAll();flash('Absences saved.')}catch(e){fail(e)}}
+async function persistAbsences(list){try{const result=await gas('webSaveAbsences',{date:S.date,day:S.day,absences:list});S.absences=normalizeAbsences(result||[]);S.plan=[];S.manualWorkspace=null;S.blockChoiceResult=null;renderAll();flash('Absences saved.')}catch(e){fail(e)}}
 
 function resetCoverageModal(){S.editingCoverage=null;$('coverageModalTitle').textContent='Add Coverage Staff';$('removeCoverageBtn').classList.add('hidden');$('covName').value='';$('covName').disabled=false;$('covRole').value='Substitute';$('covTier').value='1';const times=coverageTimeOptions({});fillTimeSelect($('covStart'),times,true);fillTimeSelect($('covEnd'),times,true);$('covStart').value='8:00 AM';$('covEnd').value='3:30 PM';$('covAllDay').checked=true;$('covActiveDefault').checked=true;document.querySelectorAll('.day-check input[value="M"],.day-check input[value="T"],.day-check input[value="W"],.day-check input[value="R"],.day-check input[value="F"]').forEach(x=>x.checked=true);$('covGrades').value='';$('covSubjects').value='';document.querySelectorAll('#assignmentTypes input').forEach(x=>x.checked=false);$('covMaxBlocks').value='';$('covMaxTeachers').value='';$('covCanSplit').checked=true;$('covNotes').value=''}
 function openCoverage(name){resetCoverageModal();const c=name?coverageMatch(name):null;if(c){S.editingCoverage=Object.assign({},c);const times=coverageTimeOptions(c);fillTimeSelect($('covStart'),times,true);fillTimeSelect($('covEnd'),times,true);$('coverageModalTitle').textContent='Edit Coverage Staff';$('removeCoverageBtn').classList.remove('hidden');$('covName').value=c.name;$('covRole').value=[...$('covRole').options].some(o=>o.value===c.role)?c.role:'Other';$('covTier').value=String(c.tier||1);$('covStart').value=timeDisplay(c.defaultStart||c.selectedStart||'');$('covEnd').value=timeDisplay(c.defaultEnd||c.selectedEnd||'');$('covAllDay').checked=!!c.allDay;$('covActiveDefault').checked=c.activeToday!==false;const days=String(c.availableDays||'').split(/[ ,;]+/).filter(Boolean);document.querySelectorAll('.day-check input[value="M"],.day-check input[value="T"],.day-check input[value="W"],.day-check input[value="R"],.day-check input[value="F"]').forEach(x=>x.checked=!days.length||days.includes(x.value));$('covGrades').value=c.allowedGrades||'';$('covSubjects').value=c.allowedSubjects||'';const types=String(c.allowedAssignmentTypes||'').split(',').map(x=>x.trim());document.querySelectorAll('#assignmentTypes input').forEach(x=>x.checked=types.includes(x.value));$('covMaxBlocks').value=c.maxBlocksPerDay||'';$('covMaxTeachers').value=c.maxTeachersPerDay||'';$('covCanSplit').checked=c.canBeSplitAcrossTeachers!==false;$('covNotes').value=c.notes||''}showModal('coverageModal')}
-async function saveCoverageStaff(){const name=$('covName').value.trim();if(!name){flash('Enter a name for the coverage staff member.','warn');return}const start=$('covStart').value,end=$('covEnd').value;if(start&&end&&mins(start)>=mins(end)){flash('Normal end time must be after the start time.','warn');return}const days=[...document.querySelectorAll('.day-check input[value="M"],.day-check input[value="T"],.day-check input[value="W"],.day-check input[value="R"],.day-check input[value="F"]')].filter(x=>x.checked).map(x=>x.value).join(',');const types=[...document.querySelectorAll('#assignmentTypes input:checked')].map(x=>x.value).join(',');const payload={originalName:S.editingCoverage?S.editingCoverage.name:'',name,role:$('covRole').value,tier:+$('covTier').value,canCoverAllDay:$('covAllDay').checked,activeByDefault:$('covActiveDefault').checked,availableDays:days,defaultStart:start,defaultEnd:end,allowedGrades:$('covGrades').value.trim(),allowedSubjects:$('covSubjects').value.trim(),allowedAssignmentTypes:types,maxBlocksPerDay:$('covMaxBlocks').value.trim(),maxTeachersPerDay:$('covMaxTeachers').value.trim(),canBeSplitAcrossTeachers:$('covCanSplit').checked,notes:$('covNotes').value.trim(),date:S.date,day:S.day};try{S.coverage=await gas('webSaveCoverageStaff',payload)||[];closeModal('coverageModal');renderCoverage();populatePreferredCoverage();flash((S.editingCoverage?'Coverage staff updated.':'Coverage staff added.'))}catch(e){fail(e)}}
+async function saveCoverageStaff(){const name=$('covName').value.trim();if(!name){flash('Enter a name for the coverage staff member.','warn');return}const start=$('covStart').value,end=$('covEnd').value;if(start&&end&&mins(start)>=mins(end)){flash('Normal end time must be after the start time.','warn');return}const days=[...document.querySelectorAll('.day-check input[value="M"],.day-check input[value="T"],.day-check input[value="W"],.day-check input[value="R"],.day-check input[value="F"]')].filter(x=>x.checked).map(x=>x.value).join(',');const types=[...document.querySelectorAll('#assignmentTypes input:checked')].map(x=>x.value).join(',');const payload={originalName:S.editingCoverage?S.editingCoverage.name:'',name,role:$('covRole').value,tier:+$('covTier').value,canCoverAllDay:$('covAllDay').checked,activeByDefault:$('covActiveDefault').checked,availableDays:days,defaultStart:start,defaultEnd:end,allowedGrades:$('covGrades').value.trim(),allowedSubjects:$('covSubjects').value.trim(),allowedAssignmentTypes:types,maxBlocksPerDay:$('covMaxBlocks').value.trim(),maxTeachersPerDay:$('covMaxTeachers').value.trim(),canBeSplitAcrossTeachers:$('covCanSplit').checked,notes:$('covNotes').value.trim(),date:S.date,day:S.day};try{S.coverage=await gas('webSaveCoverageStaff',payload)||[];S.manualWorkspace=null;S.blockChoiceResult=null;closeModal('coverageModal');renderCoverage();populatePreferredCoverage();flash((S.editingCoverage?'Coverage staff updated.':'Coverage staff added.'))}catch(e){fail(e)}}
 function requestRemoveCoverage(){if(!S.editingCoverage)return;S.pendingDelete=S.editingCoverage.name;$('confirmText').textContent='Remove '+S.pendingDelete+' from the Coverage Staff team?';showModal('confirmModal')}
-async function confirmRemoveCoverage(){if(!S.pendingDelete)return;try{S.coverage=await gas('webDeleteCoverageStaff',{name:S.pendingDelete,date:S.date,day:S.day})||[];S.pendingDelete=null;closeModal('confirmModal');closeModal('coverageModal');renderCoverage();populatePreferredCoverage();flash('Coverage staff removed.')}catch(e){fail(e)}}
-async function toggleCoverage(name,available){try{S.coverage=await gas('webToggleCoverageStaff',{name,date:S.date,day:S.day,available})||[];renderCoverage();populatePreferredCoverage();flash(name+(available?' is available today.':' is unavailable today.'))}catch(e){fail(e);renderCoverage()}}
+async function confirmRemoveCoverage(){if(!S.pendingDelete)return;try{S.coverage=await gas('webDeleteCoverageStaff',{name:S.pendingDelete,date:S.date,day:S.day})||[];S.manualWorkspace=null;S.blockChoiceResult=null;S.pendingDelete=null;closeModal('confirmModal');closeModal('coverageModal');renderCoverage();populatePreferredCoverage();flash('Coverage staff removed.')}catch(e){fail(e)}}
+async function toggleCoverage(name,available){try{S.coverage=await gas('webToggleCoverageStaff',{name,date:S.date,day:S.day,available})||[];S.manualWorkspace=null;S.blockChoiceResult=null;renderCoverage();populatePreferredCoverage();flash(name+(available?' is available today.':' is unavailable today.'))}catch(e){fail(e);renderCoverage()}}
 
 async function openBlock(index){
   const r=S.plan[index];
@@ -543,13 +545,18 @@ async function openBlock(index){
   showModal('blockModal');
 
   try{
-    const result=await gas('webGetManualCoverageChoices',{
-      date:S.date,
-      day:S.day,
-      rows:S.plan,
-      blockIndex:index
-    });
+    const workspace=S.manualWorkspace;
+    const cached=workspace&&workspace.date===S.date&&workspace.day===S.day&&workspace.blocks&&workspace.blocks[index];
+    const result=cached
+      ? Object.assign({},cached,{schedules:workspace.schedules||{}})
+      : await gas('webGetManualCoverageChoices',{
+          date:S.date,
+          day:S.day,
+          rows:S.plan,
+          blockIndex:index
+        });
     if(S.editingBlock!==index)return;
+    S.blockChoiceResult=result||null;
 
     const choices=(result&&result.choices)||[];
     let html='<option value="">— Leave unfilled —</option>';
@@ -599,42 +606,38 @@ async function openBlock(index){
   }
 }
 
-async function saveBlock(){
+function saveBlock(){
   const i=S.editingBlock;
   if(i==null)return;
   const r=S.plan[i];
   const name=$('blockCoverage').value;
+  const result=S.blockChoiceResult||{};
+  const choice=name?(result.choices||[]).find(item=>item.name===name):null;
 
-  $('saveBlockBtn').disabled=true;
-  try{
-    const validation=await gas('webValidateManualCoverageAssignment',{
-      date:S.date,
-      day:S.day,
-      rows:S.plan,
-      blockIndex:i,
-      name:name
-    });
-
-    r.Assigned_Coverage=validation.name||'';
-    r.Status=validation.name?'Assigned':'Unfilled';
-    r.Coverage_Mode=validation.name?'Manual':'';
-    r.Coverage_Tier_Used=validation.tier==null?'':String(validation.tier||'');
-    r.Notes=validation.reason||(
-      validation.name?'Manually assigned in web app.':'Manually left unfilled in web app.'
-    );
-
-    closeModal('blockModal');
-    renderAll();
-    flash(validation.name?'Block assigned to '+validation.name+'.':'Block marked unfilled.','ok');
-  }catch(e){
-    fail(e);
-    await openBlock(i);
-  }finally{
-    $('saveBlockBtn').disabled=false;
+  if(name&&!choice){
+    flash(name+' is not in the current available-staff list. Reopen this block to refresh availability.','warn');
+    return;
   }
+
+  r.Assigned_Coverage=name||'';
+  r.Status=name?'Assigned':'Unfilled';
+  r.Coverage_Mode=name?'Manual':'';
+  r.Coverage_Tier_Used=choice&&choice.tier!=null?String(choice.tier||''):'';
+  r.Notes=name
+    ? 'Manually assigned. '+(choice&&choice.reason?choice.reason:'Selected from the live available-staff list.')
+    : 'Manually left unfilled.';
+
+  // Choices for other blocks depend on the current plan assignments. Discard
+  // the generated workspace after a manual change; the next block gets a fresh
+  // live server check. Final Save Plan / Create Handout revalidate everything.
+  S.manualWorkspace=null;
+  S.blockChoiceResult=null;
+  closeModal('blockModal');
+  renderAll();
+  flash(name?'Block assigned to '+name+'.':'Block marked unfilled.','ok');
 }
 
-async function generate(){if(!S.absences.length&&!S.fieldTrips.length)return;S.generating=true;S.plan=[];renderPlan();renderStats();try{const result=await gas('webGenerateCoverage',{date:S.date,day:S.day});S.plan=result.rows||[];S.fieldTripCoverage=(result.activeCoverageStaff||[]).filter(c=>(c.fieldTripEvents||[]).length);const u=(result.summary&&result.summary.unfilledBlocks)||0;const ms=Number(result.summary&&result.summary.elapsedMs||0);const timing=ms?' in '+(ms/1000).toFixed(ms<10000?1:0)+'s':'';flash('Plan generated — '+S.plan.length+' coverage block'+(S.plan.length===1?'':'s')+timing+'.',u?'warn':'ok')}catch(e){fail(e)}finally{S.generating=false;renderAll()}}
+async function generate(){if(!S.absences.length&&!S.fieldTrips.length)return;S.generating=true;S.plan=[];S.manualWorkspace=null;S.blockChoiceResult=null;renderPlan();renderStats();try{const result=await gas('webGenerateCoverage',{date:S.date,day:S.day});S.plan=result.rows||[];S.manualWorkspace=result.manualWorkspace||null;S.fieldTripCoverage=(result.activeCoverageStaff||[]).filter(c=>(c.fieldTripEvents||[]).length);const u=(result.summary&&result.summary.unfilledBlocks)||0;const ms=Number(result.summary&&result.summary.elapsedMs||0);const timing=ms?' in '+(ms/1000).toFixed(ms<10000?1:0)+'s':'';if(result.summary&&result.summary.timingMs)console.log('Coverage Generate timing',result.summary.timingMs);flash('Plan generated — '+S.plan.length+' coverage block'+(S.plan.length===1?'':'s')+timing+'.',u?'warn':'ok')}catch(e){fail(e)}finally{S.generating=false;renderAll()}}
 async function savePlan(){try{const r=await gas('webSaveCoverage',S.plan);const saved=(r&&r.savedRows)||S.plan.length;flash('Saved '+saved+' row'+(saved===1?'':'s')+' to Coverage Output.')}catch(e){fail(e)}}
 async function createHandout(){try{const r=await gas('webCreateHandoutFromRows',S.plan);flash('Created '+((r&&r.name)||'coverage handout')+'.')}catch(e){fail(e)}}
 
