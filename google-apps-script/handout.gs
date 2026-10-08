@@ -1,4 +1,4 @@
-const FIELD_TRIP_HANDOUT_MODULE_VERSION = 4;
+const FIELD_TRIP_HANDOUT_MODULE_VERSION = 5;
 const FIELD_TRIP_FORM_MAX_ASSIGNMENTS_ = 6;
 const FIELD_TRIP_FORMS_PER_PAGE_ = 2;
 const FIELD_TRIP_FORM_COLUMN_WIDTHS_ = [105, 87, 98, 175, 75];
@@ -342,6 +342,17 @@ function styleGeneratedFieldTripTable_(table) {
         .setBold(r === 0 || (r > 0 && c === 0));
     }
   }
+}
+
+function fieldTripHandoutDestination_(trip) {
+  const destination = String(trip && trip.destination || '').trim();
+  if (destination) return destination;
+
+  // Older trip records sometimes put the destination in the event name
+  // ("6th Grade - National Gallery") and leave Destination blank.
+  const name = String(trip && trip.name || '').trim();
+  const parts = name.split(/\s+[—–-]\s+/).map(part => part.trim()).filter(Boolean);
+  return parts.length > 1 ? parts[parts.length - 1] : '';
 }
 
 function formatFieldTripFormDate_(date) {

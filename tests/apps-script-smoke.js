@@ -282,6 +282,25 @@ assert(
   'generated field-trip forms must retain the approved five-column table'
 );
 
+const destinationHelper = functionBody(sources['handout.gs'], 'fieldTripHandoutDestination_');
+assert(
+  destinationHelper.includes('trip && trip.destination'),
+  'generated field-trip forms must retain the destination helper'
+);
+const resolveFieldTripDestination = new Function(
+  destinationHelper + '; return fieldTripHandoutDestination_;'
+)();
+assert.strictEqual(
+  resolveFieldTripDestination({ destination: 'National Gallery', name: '6th Grade - Other' }),
+  'National Gallery',
+  'field-trip destination helper must prefer the explicit Destination field'
+);
+assert.strictEqual(
+  resolveFieldTripDestination({ destination: '', name: '6th Grade - National Gallery' }),
+  'National Gallery',
+  'field-trip destination helper must preserve the legacy event-name fallback'
+);
+
 const fieldTripPage = functionBody(sources['handout.gs'], 'formatGeneratedFieldTripHandoutPage_');
 assert(
   fieldTripPage.includes('body.setPageWidth(612)') &&
