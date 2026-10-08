@@ -206,22 +206,62 @@ assert(
   'targeted pool rebuild must mark only the requested date revision fresh'
 );
 
+const fieldTripPackage = functionBody(sources['handout.gs'], 'createCoverageHandoutPackage_');
 assert(
-  sources['handout.gs'].includes('Field trip form could not remove unused assignment rows.'),
-  'handout generation must verify assignment-row compaction'
+  !fieldTripPackage.includes('getFieldTripFormTemplateFile_'),
+  'field-trip handouts must not open the old Drive template at runtime'
 );
 assert(
-  sources['handout.gs'].includes('Field trip form compaction failed:'),
-  'handout generation must verify unused form removal'
-);
-const trailingFormRemoval = functionBody(sources['handout.gs'], 'removeTrailingUnusedFieldTripForm_');
-assert(
-  trailingFormRemoval.includes("body.appendParagraph('')"),
-  'unused field-trip form removal must preserve a required terminal document paragraph'
+  !sources['handout.gs'].includes('makeCopy(outputName, folder)'),
+  'field-trip handouts must be generated rather than copied from a template'
 );
 assert(
-  trailingFormRemoval.includes('terminalParagraphIndex - 1'),
-  'unused field-trip form removal must never delete the terminal sentinel paragraph'
+  !sources['handout.gs'].includes('removeTrailingUnusedFieldTripForm_'),
+  'generated field-trip handouts must not depend on destructive template trimming'
+);
+
+const fieldTripBuilder = functionBody(sources['handout.gs'], 'createFieldTripCoverageFormDocs_');
+assert(
+  fieldTripBuilder.includes('DocumentApp.create(outputName)'),
+  'field-trip handouts must start from a fresh Google Doc'
+);
+assert(
+  fieldTripBuilder.includes('appendGeneratedFieldTripForm_'),
+  'field-trip handouts must build each required form explicitly'
+);
+assert(
+  fieldTripBuilder.includes('body.getTables().length !== formUnits.length'),
+  'field-trip handout generation must verify that every form produced exactly one table'
+);
+assert(
+  fieldTripBuilder.includes('removeGeneratedFieldTripStarterParagraph_(body)'),
+  'field-trip handouts must remove the empty starter paragraph from a newly created Doc'
+);
+
+const starterCleanup = functionBody(sources['handout.gs'], 'removeGeneratedFieldTripStarterParagraph_');
+assert(
+  starterCleanup.includes('body.getChild(0)') &&
+  starterCleanup.includes('body.removeChild(first)'),
+  'starter cleanup must target only the initial empty paragraph'
+);
+
+const fieldTripForm = functionBody(sources['handout.gs'], 'appendGeneratedFieldTripForm_');
+assert(
+  fieldTripForm.includes("'FIELD TRIP COVERAGE FORM"),
+  'generated field-trip forms must include the approved form heading'
+);
+assert(
+  fieldTripForm.includes("'SPECIAL INSTRUCTIONS'") &&
+  fieldTripForm.includes("'WITH'"),
+  'generated field-trip forms must retain the approved five-column table'
+);
+
+const fieldTripPage = functionBody(sources['handout.gs'], 'formatGeneratedFieldTripHandoutPage_');
+assert(
+  fieldTripPage.includes('body.setPageWidth(612)') &&
+  fieldTripPage.includes('body.setPageHeight(792)') &&
+  fieldTripPage.includes('body.setMarginTop(36)'),
+  'generated field-trip forms must retain the approved US Letter portrait geometry'
 );
 
 assert(

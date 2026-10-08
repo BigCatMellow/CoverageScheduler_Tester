@@ -1,4 +1,7 @@
-const FIELD_TRIP_HANDOUT_MODULE_VERSION = 3;
+const FIELD_TRIP_HANDOUT_MODULE_VERSION = 4;
+const FIELD_TRIP_FORM_MAX_ASSIGNMENTS_ = 6;
+const FIELD_TRIP_FORMS_PER_PAGE_ = 2;
+const FIELD_TRIP_FORM_COLUMN_WIDTHS_ = [105, 87, 98, 175, 75];
 
 function createCoverageHandoutDocWideFromLatestPreview_() {
   const preview = getLatestPreview_();
@@ -56,12 +59,9 @@ function createCoverageHandoutPackage_(rows, date, day) {
   const folder = getCoverageHandoutFolder_();
   const documents = [];
 
-  let templateFile = null;
   let fieldTripContext = null;
 
   if (fieldTripEventIds.length) {
-    templateFile = getFieldTripFormTemplateFile_();
-    validateFieldTripFormTemplate_(DocumentApp.openById(templateFile.getId()).getBody());
     fieldTripContext = buildFieldTripFormContext_(date, day);
   }
 
@@ -88,7 +88,6 @@ function createCoverageHandoutPackage_(rows, date, day) {
       date,
       day,
       fieldTripContext,
-      templateFile,
       folder
     );
     tripDocs.forEach(doc => documents.push(doc));
@@ -108,57 +107,6 @@ function createCoverageHandoutPackage_(rows, date, day) {
     folderUrl: folder.getUrl(),
     folderName: folder.getName()
   };
-}
-
-function getFieldTripFormTemplateFile_() {
-  const templateId = String(coverageConfig_().Field_Trip_Form_Template_ID || '').trim();
-  if (!templateId) {
-    throw new Error(
-      'Field trip handout template is not configured. Set Config → Field_Trip_Form_Template_ID to the Google Doc template ID.'
-    );
-  }
-
-  let file;
-  try {
-    file = DriveApp.getFileById(templateId);
-  } catch (error) {
-    throw new Error('The configured field trip handout template could not be opened.');
-  }
-
-  if (file.isTrashed()) {
-    throw new Error('The configured field trip handout template is in the trash.');
-  }
-  if (file.getMimeType() !== MimeType.GOOGLE_DOCS) {
-    throw new Error('The field trip handout template must be a native Google Doc.');
-  }
-
-  return file;
-}
-
-function validateFieldTripFormTemplate_(body) {
-  const tables = body.getTables();
-  if (tables.length < 2) {
-    throw new Error('The field trip handout template no longer contains both coverage tables.');
-  }
-
-  for (let i = 0; i < 2; i++) {
-    if (tables[i].getNumRows() < 7 || tables[i].getRow(0).getNumCells() < 5) {
-      throw new Error('The field trip handout template table structure has changed.');
-    }
-  }
-
-  [
-    'COVERAGE FOR:',
-    'DATE:',
-    'CLASS(ES) TAKING TRIP:',
-    'TRIP DESTINATION:',
-    'DEPARTURE TIME:',
-    'APPROXIMATE RETURN TIME:'
-  ].forEach(label => {
-    if (fieldTripTemplateParagraphs_(body, label).length < 2) {
-      throw new Error('The field trip handout template is missing the expected label: ' + label);
-    }
-  });
 }
 
 function buildFieldTripFormContext_(date, day) {
@@ -185,7 +133,7 @@ function buildFieldTripFormContext_(date, day) {
   };
 }
 
-function createFieldTripCoverageFormDocs_(rows, trip, date, day, context, templateFile, folder) {
+function createFieldTripCoverageFormDocs_(rows, trip, date, day, context, folder) {
   const byTeacher = {};
   (rows || []).forEach(row => {
     const teacher = String(row.Absent_Staff || '').trim();
@@ -203,13 +151,10 @@ function createFieldTripCoverageFormDocs_(rows, trip, date, day, context, templa
         String(a.Class || '').localeCompare(String(b.Class || ''))
       );
 
-    // The template has six assignment rows per teacher. Keep the existing
-    // safety split only for unusually long days, but all form units now live
-    // in one output document instead of separate Part 1 / Part 2 files.
-    for (let offset = 0; offset < teacherRows.length; offset += 6) {
+    for (let offset = 0; offset < teacherRows.length; offset += FIELD_TRIP_FORM_MAX_ASSIGNMENTS_) {
       formUnits.push({
         coverageFor: teacher,
-        rows: teacherRows.slice(offset, offset + 6)
+        rows: teacherRows.slice(offset, offset + FIELD_TRIP_FORM_MAX_ASSIGNMENTS_)
       });
     }
   });
@@ -217,38 +162,30 @@ function createFieldTripCoverageFormDocs_(rows, trip, date, day, context, templa
   if (!formUnits.length) return [];
 
   const outputName = 'Field Trip Coverage - ' + (trip.name || 'Field Trip') + ' - ' + date;
-  const copy = templateFile.makeCopy(outputName, folder);
-  const doc = DocumentApp.openById(copy.getId());
+  const doc = DocumentApp.create(outputName);
+  DriveApp.getFileById(doc.getId()).moveTo(folder);
   const body = doc.getBody();
-  const templateBody = DocumentApp.openById(templateFile.getId()).getBody();
 
-  // The source template contains two form slots. Append additional copies of
-  // that same template structure to this one document when more slots are
-  // needed. No forced page breaks are inserted; after unused rows are trimmed,
-  // Google Docs can naturally fit as many compact forms on a page as space
-  // allows.
-  const requiredTemplateCopies = Math.ceil(formUnits.length / 2);
-  for (let copyIndex = 1; copyIndex < requiredTemplateCopies; copyIndex++) {
-    appendFieldTripTemplateBodyCopy_(body, templateBody);
-  }
-
-  validateFieldTripFormTemplate_(body);
+  formatGeneratedFieldTripHandoutPage_(body);
 
   formUnits.forEach((unit, formIndex) => {
-    fillFieldTripForm_(body, formIndex, unit, trip, date, context);
+    appendGeneratedFieldTripForm_(body, unit, trip, date, context);
+
+    if (formIndex >= formUnits.length - 1) return;
+
+    if ((formIndex + 1) % FIELD_TRIP_FORMS_PER_PAGE_ === 0) {
+      body.appendPageBreak();
+    } else {
+      appendGeneratedFieldTripFormSpacer_(body);
+    }
   });
 
-  // An odd number of form units leaves the final template's second form empty.
-  // Remove that entire unused form rather than printing a blank half-page.
-  if (formUnits.length % 2 === 1) {
-    removeTrailingUnusedFieldTripForm_(body);
-  }
+  removeGeneratedFieldTripStarterParagraph_(body);
 
-  const remainingTables = body.getTables().length;
-  if (remainingTables !== formUnits.length) {
+  if (body.getTables().length !== formUnits.length) {
     throw new Error(
-      'Field trip form compaction failed: expected ' + formUnits.length +
-      ' filled table(s), found ' + remainingTables + '.'
+      'Field trip handout build failed: expected ' + formUnits.length +
+      ' table(s), found ' + body.getTables().length + '.'
     );
   }
 
@@ -258,182 +195,151 @@ function createFieldTripCoverageFormDocs_(rows, trip, date, day, context, templa
     type: 'field-trip',
     label: 'Field Trip Form - ' + (trip.name || 'Field Trip'),
     eventId: trip.eventId || '',
-    id: copy.getId(),
-    url: copy.getUrl(),
-    name: copy.getName(),
+    id: doc.getId(),
+    url: doc.getUrl(),
+    name: doc.getName(),
     folderId: folder.getId(),
     folderUrl: folder.getUrl(),
     folderName: folder.getName()
   }];
 }
 
-function appendFieldTripTemplateBodyCopy_(targetBody, sourceBody) {
-  for (let i = 0; i < sourceBody.getNumChildren(); i++) {
-    const child = sourceBody.getChild(i);
-    const type = child.getType();
+function removeGeneratedFieldTripStarterParagraph_(body) {
+  // DocumentApp.create() starts every new Doc with one empty paragraph.
+  // Once the generated forms exist, remove only that original leading blank
+  // so the first form starts at the same vertical position as the reference.
+  if (body.getNumChildren() <= 1) return;
 
-    if (type === DocumentApp.ElementType.PARAGRAPH) {
-      targetBody.appendParagraph(child.copy().asParagraph());
-    } else if (type === DocumentApp.ElementType.TABLE) {
-      targetBody.appendTable(child.copy().asTable());
-    } else if (type === DocumentApp.ElementType.LIST_ITEM) {
-      targetBody.appendListItem(child.copy().asListItem());
-    } else if (type === DocumentApp.ElementType.PAGE_BREAK) {
-      targetBody.appendPageBreak();
-    } else if (type === DocumentApp.ElementType.HORIZONTAL_RULE) {
-      targetBody.appendHorizontalRule();
-    }
-  }
+  const first = body.getChild(0);
+  if (first.getType() !== DocumentApp.ElementType.PARAGRAPH) return;
+  if (String(first.asParagraph().getText() || '').trim()) return;
+
+  body.removeChild(first);
 }
 
-function removeTrailingUnusedFieldTripForm_(body) {
-  let startIndex = -1;
-
-  for (let i = body.getNumChildren() - 1; i >= 0; i--) {
-    const child = body.getChild(i);
-    if (child.getType() !== DocumentApp.ElementType.PARAGRAPH) continue;
-
-    const text = String(child.asParagraph().getText() || '').trim();
-    if (text.indexOf('FIELD TRIP COVERAGE FORM') !== -1) {
-      startIndex = i;
-      break;
-    }
-  }
-
-  if (startIndex === -1) return;
-
-  // Google Docs requires every document section to retain a final paragraph.
-  // The unused second form can include that required paragraph, so deleting
-  // every child from the form heading through EOF throws:
-  // "Cannot remove the last paragraph in a document section."
-  //
-  // Append our own empty terminal paragraph first, keep it, then remove the
-  // entire unused form above it.
-  body.appendParagraph('');
-  const terminalParagraphIndex = body.getNumChildren() - 1;
-
-  for (let i = terminalParagraphIndex - 1; i >= startIndex; i--) {
-    body.removeChild(body.getChild(i));
-  }
+function formatGeneratedFieldTripHandoutPage_(body) {
+  // Mirrors the approved reference form: US Letter portrait with 0.5" margins.
+  body.setPageWidth(612);
+  body.setPageHeight(792);
+  body.setMarginTop(36);
+  body.setMarginBottom(36);
+  body.setMarginLeft(36);
+  body.setMarginRight(36);
 }
 
+function appendGeneratedFieldTripForm_(body, formUnit, trip, date, context) {
+  const heading = appendGeneratedFieldTripMetaLine_(
+    body,
+    'FIELD TRIP COVERAGE FORM\t\t\t\tPREPARED BY:  C. SCHREMBS'
+  );
+  const headingText = heading.editAsText();
+  headingText.setUnderline(0, 'FIELD TRIP COVERAGE FORM'.length - 1, true);
 
-function fillFieldTripForm_(body, formIndex, formUnit, trip, date, context) {
-  insertFieldTripTemplateValue_(body, 'COVERAGE FOR:', formIndex, formUnit.coverageFor);
-  insertFieldTripTemplateValue_(body, 'DATE:', formIndex, formatFieldTripFormDate_(date));
-  insertFieldTripTemplateValue_(body, 'CLASS(ES) TAKING TRIP:', formIndex, formatFieldTripFormGrades_(trip.grades));
-  insertFieldTripTemplateValue_(body, 'TRIP DESTINATION:', formIndex, fieldTripHandoutDestination_(trip));
-  insertFieldTripTemplateValue_(body, 'DEPARTURE TIME:', formIndex, trip.start || '');
-  insertFieldTripTemplateValue_(body, 'APPROXIMATE RETURN TIME:', formIndex, trip.end || '');
-  compactFieldTripTimeLine_(body, formIndex);
+  appendGeneratedFieldTripMetaLine_(
+    body,
+    'COVERAGE FOR:  ' + String(formUnit.coverageFor || '').trim() +
+      '\t\t\t\tDATE:  ' + formatFieldTripFormDate_(date)
+  );
+  appendGeneratedFieldTripMetaLine_(
+    body,
+    'CLASS(ES) TAKING TRIP: ' + formatFieldTripFormGrades_(trip.grades)
+  );
+  appendGeneratedFieldTripMetaLine_(
+    body,
+    'TRIP DESTINATION:  ' + fieldTripHandoutDestination_(trip)
+  );
+  appendGeneratedFieldTripMetaLine_(
+    body,
+    'DEPARTURE TIME: ' + String(trip.start || '').trim() +
+      '\t\t\tAPPROXIMATE RETURN TIME: ' + String(trip.end || '').trim()
+  );
 
-  const table = body.getTables()[formIndex];
-  const formRows = formUnit.rows || [];
-  formRows.forEach((row, rowIndex) => {
-    const withTeacher = resolveFieldTripWithTeacher_(row, trip, context);
-    const values = [
+  const tableData = [[
+    'NAME',
+    'TIME NEEDED',
+    'RM#/SUBJECT',
+    'SPECIAL INSTRUCTIONS',
+    'WITH'
+  ]];
+
+  (formUnit.rows || []).forEach(row => {
+    tableData.push([
       String(row.Assigned_Coverage || '').trim(),
       formatWideHandoutTimeRange_(row.Start, row.End),
       formatFieldTripRoomSubject_(row),
       String(trip.notes || '').trim(),
-      withTeacher
-    ];
-
-    values.forEach((value, columnIndex) => {
-      appendFieldTripTemplateCellText_(table.getCell(rowIndex + 1, columnIndex), value);
-    });
+      resolveFieldTripWithTeacher_(row, trip, context)
+    ]);
   });
 
-  // The source template reserves six rows. Keep only the rows this teacher
-  // actually needs so the handout does not print large blank areas.
-  while (table.getNumRows() > formRows.length + 1) {
-    table.removeRow(table.getNumRows() - 1);
-  }
+  const table = body.appendTable(tableData);
+  styleGeneratedFieldTripTable_(table);
+}
 
-  if (table.getNumRows() !== formRows.length + 1) {
-    throw new Error('Field trip form could not remove unused assignment rows.');
+function appendGeneratedFieldTripMetaLine_(body, text) {
+  const paragraph = body.appendParagraph(String(text == null ? '' : text));
+  paragraph
+    .setSpacingBefore(0)
+    .setSpacingAfter(0)
+    .setLineSpacing(1.5);
+
+  paragraph.editAsText()
+    .setFontFamily('Cambria')
+    .setFontSize(12)
+    .setBold(true);
+
+  return paragraph;
+}
+
+function appendGeneratedFieldTripFormSpacer_(body) {
+  // The original two-up form used six blank 11pt lines between half-forms.
+  for (let i = 0; i < 6; i++) {
+    const paragraph = body.appendParagraph('');
+    paragraph
+      .setSpacingBefore(0)
+      .setSpacingAfter(0)
+      .setLineSpacing(1);
+    paragraph.editAsText()
+      .setFontFamily('Cambria')
+      .setFontSize(11);
   }
 }
 
-function compactFieldTripTimeLine_(body, occurrence) {
-  const paragraphs = body.getParagraphs().filter(paragraph => {
-    const text = String(paragraph.getText() || '');
-    return text.indexOf('DEPARTURE TIME:') !== -1 &&
-      text.indexOf('APPROXIMATE RETURN TIME:') !== -1;
+function styleGeneratedFieldTripTable_(table) {
+  FIELD_TRIP_FORM_COLUMN_WIDTHS_.forEach((width, columnIndex) => {
+    table.setColumnWidth(columnIndex, width);
   });
 
-  if (paragraphs.length <= occurrence) return;
+  table.setBorderColor('#000000');
+  table.setBorderWidth(1);
 
-  // The source template uses a long tab run between the two time fields.
-  // Once values are inserted, that run can wrap the return time to a second
-  // line. Shorten only that spacer in the generated copy.
-  paragraphs[occurrence].editAsText().replaceText('\\t{4,}', '\t\t\t');
-}
+  for (let r = 0; r < table.getNumRows(); r++) {
+    const row = table.getRow(r);
+    row.setMinimumHeight(r === 0 ? 14 : 15);
 
-function fieldTripHandoutDestination_(trip) {
-  const destination = String(trip && trip.destination || '').trim();
-  if (destination) return destination;
+    for (let c = 0; c < row.getNumCells(); c++) {
+      const cell = row.getCell(c);
+      cell.setVerticalAlignment(DocumentApp.VerticalAlignment.TOP);
+      cell.setPaddingTop(1);
+      cell.setPaddingBottom(1);
+      cell.setPaddingLeft(2);
+      cell.setPaddingRight(2);
 
-  // Older trip records sometimes put the destination in the event name
-  // ("6th Grade - National Gallery") and leave Destination blank.
-  const name = String(trip && trip.name || '').trim();
-  const parts = name.split(/\s+[—–-]\s+/).map(part => part.trim()).filter(Boolean);
-  return parts.length > 1 ? parts[parts.length - 1] : '';
-}
+      for (let p = 0; p < cell.getNumChildren(); p++) {
+        const child = cell.getChild(p);
+        if (child.getType() !== DocumentApp.ElementType.PARAGRAPH) continue;
 
-function fieldTripTemplateParagraphs_(body, label) {
-  return body.getParagraphs().filter(paragraph =>
-    String(paragraph.getText() || '').indexOf(label) !== -1
-  );
-}
+        child.asParagraph()
+          .setAlignment(DocumentApp.HorizontalAlignment.CENTER)
+          .setSpacingBefore(0)
+          .setSpacingAfter(0)
+          .setLineSpacing(1);
+      }
 
-function insertFieldTripTemplateValue_(body, label, occurrence, value) {
-  const textValue = String(value == null ? '' : value).trim();
-  if (!textValue) return;
-
-  const paragraphs = fieldTripTemplateParagraphs_(body, label);
-  if (paragraphs.length <= occurrence) {
-    throw new Error('The field trip handout template is missing ' + label);
-  }
-
-  const text = paragraphs[occurrence].editAsText();
-  const current = text.getText();
-  const labelIndex = current.indexOf(label);
-  if (labelIndex === -1) {
-    throw new Error('The field trip handout template is missing ' + label);
-  }
-
-  text.insertText(labelIndex + label.length, ' ' + textValue);
-}
-
-function appendFieldTripTemplateCellText_(cell, value) {
-  const textValue = String(value == null ? '' : value).trim();
-  if (!textValue) return;
-
-  let paragraph = null;
-  for (let i = 0; i < cell.getNumChildren(); i++) {
-    const child = cell.getChild(i);
-    if (child.getType() === DocumentApp.ElementType.PARAGRAPH) {
-      paragraph = child.asParagraph();
-      break;
-    }
-  }
-
-  if (!paragraph) {
-    paragraph = cell.appendParagraph('');
-  }
-
-  paragraph.editAsText().setText(textValue);
-
-  // Template cells sometimes contain extra empty paragraphs. They create
-  // visible blank lines in exported DOCX/PDF, so remove them after setting
-  // the actual value.
-  for (let i = cell.getNumChildren() - 1; i >= 0; i--) {
-    const child = cell.getChild(i);
-    if (child === paragraph) continue;
-    if (child.getType() === DocumentApp.ElementType.PARAGRAPH &&
-        !String(child.asParagraph().getText() || '').trim()) {
-      cell.removeChild(child);
+      cell.editAsText()
+        .setFontFamily('Cambria')
+        .setFontSize(11)
+        .setBold(r === 0 || (r > 0 && c === 0));
     }
   }
 }
