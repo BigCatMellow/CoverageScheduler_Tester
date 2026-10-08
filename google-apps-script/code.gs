@@ -826,6 +826,7 @@ function getCoverageBootstrap_(payload) {
     'Substitute Availability',
     'Daily Absences',
     'Field Trips',
+    'Coverage Output',
     'Config'
   ]);
   coveragePerfMark_('snapshot-loaded');
@@ -847,9 +848,10 @@ function getCoverageBootstrap_(payload) {
     // needed only by Generate/manual reassignment, not to display the day.
     currentAbsences: getDailyAbsencesForDate_(today, dayCode),
     currentFieldTrips: getFieldTripsForDate_(today),
-    // Web plans live in the browser until Save. Do not read the shared _Preview
-    // scratch sheet on every date navigation.
-    currentPreview: { rows: [], summary: { totalBlocks: 0, assignedBlocks: 0, unfilledBlocks: 0 } },
+    // Generated-but-unsaved plans live only in the browser, but a saved plan
+    // is durable state. Re-open the saved Coverage Output rows for this date
+    // without ever consulting the shared _Preview scratch sheet.
+    currentPreview: getSavedCoverageForDate_(today, dayCode),
     config: getConfigMap_()
   };
 }

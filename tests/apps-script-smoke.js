@@ -84,6 +84,14 @@ assert(
   'web bootstrap must not read the shared _Preview scratch sheet'
 );
 assert(
+  bootstrap.includes("'Coverage Output'"),
+  'web bootstrap must include saved Coverage Output in its request snapshot'
+);
+assert(
+  bootstrap.includes('getSavedCoverageForDate_(today, dayCode)'),
+  'web bootstrap must restore the saved plan for the selected date'
+);
+assert(
   bootstrap.includes('dayStaffSchedules'),
   'web bootstrap must batch selected-day staff schedules for local absence editing'
 );
@@ -103,6 +111,24 @@ const handoutPreview = functionBody(sources['handout.gs'], 'createCoverageHandou
 assert(
   handoutPreview.includes('validateCoveragePlanForSave_'),
   'latest-preview handout creation must revalidate before printing'
+);
+
+const savedCoverageReader = functionBody(sources['scheduler.gs'], 'getSavedCoverageForDate_');
+assert(
+  savedCoverageReader.includes("readSheetObjects_('Coverage Output')"),
+  'saved-plan reload must read durable Coverage Output rather than _Preview'
+);
+assert(
+  savedCoverageReader.includes('normalizeDateKey_(row.Date) === dateKey'),
+  'saved-plan reload must be date-scoped'
+);
+assert(
+  savedCoverageReader.includes("String(row.Day || '').trim() === dayCode"),
+  'saved-plan reload must preserve the selected day code'
+);
+assert(
+  savedCoverageReader.includes("String(row.Status || '').trim() === 'Assigned'"),
+  'saved-plan reload must rebuild its assignment summary from saved rows'
 );
 
 const generatePreview = functionBody(sources['scheduler.gs'], 'generateCoveragePreview');

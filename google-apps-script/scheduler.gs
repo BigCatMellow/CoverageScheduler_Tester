@@ -3393,6 +3393,28 @@ function saveCoveragePlanUnlocked_(payload) {
   };
 }
 
+function getSavedCoverageForDate_(date, day) {
+  const dateKey = normalizeDateKey_(date);
+  const dayCode = String(day || guessDayCodeFromDate_(dateKey) || '').trim();
+
+  let rows = readSheetObjects_('Coverage Output');
+  if (dateKey) {
+    rows = rows.filter(row => normalizeDateKey_(row.Date) === dateKey);
+  }
+  if (dayCode) {
+    rows = rows.filter(row => String(row.Day || '').trim() === dayCode);
+  }
+
+  return {
+    rows: rows,
+    summary: {
+      totalBlocks: rows.length,
+      assignedBlocks: rows.filter(row => String(row.Status || '').trim() === 'Assigned').length,
+      unfilledBlocks: rows.filter(row => String(row.Status || '').trim() !== 'Assigned').length
+    }
+  };
+}
+
 function getLatestPreview_(date, day) {
   let rows = readSheetObjects_('_Preview');
   if (date) rows = rows.filter(r => normalizeDateKey_(r.Date) === date);
