@@ -162,7 +162,8 @@ function getWebStaffRoster_(dayCode) {
         role: match ? match.role : 'Teacher',
         subject: summarizeRosterSubjects_(blocks),
         blocks: blocks,
-        scheduleMatched: !!match
+        scheduleMatched: !!match,
+        scheduleLoaded: true
       };
     });
 }

@@ -79,6 +79,21 @@ assert(
   'date bootstrap must not read the full Teacher Schedule'
 );
 
+assert(
+  !bootstrap.includes("'_Preview'"),
+  'web bootstrap must not read the shared _Preview scratch sheet'
+);
+assert(
+  bootstrap.includes('dayStaffSchedules'),
+  'web bootstrap must batch selected-day staff schedules for local absence editing'
+);
+
+const webGenerate = functionBody(sources['code.gs'], 'webGenerateCoverage');
+assert(
+  webGenerate.includes('persistPreview: false'),
+  'web Generate must explicitly disable shared preview persistence'
+);
+
 const handoutWeb = functionBody(sources['code.gs'], 'webCreateHandoutFromRows');
 assert(
   handoutWeb.includes('validateCoveragePlanForSave_'),
@@ -98,6 +113,14 @@ assert(
 assert(
   generatePreview.includes('teacherScheduleRowsForDate_'),
   'Generate must use the prepared weekday schedule cache'
+);
+assert(
+  generatePreview.includes('payload.persistPreview === true'),
+  'Generate may write _Preview only when explicitly requested by the spreadsheet-menu workflow'
+);
+assert(
+  generatePreview.includes('buildManualChoiceWorkspace_'),
+  'Generate must prepare the bounded browser reassignment workspace'
 );
 
 const liveContext = functionBody(sources['scheduler.gs'], 'buildCoverageLiveContext_');
@@ -121,6 +144,22 @@ assert(
 assert(
   dayCacheBuilder.includes('normalizeTeacherScheduleRow_'),
   'weekday caches must store prepared/derived schedule data'
+);
+
+const classGradeLookup = functionBody(sources['class-schedule.gs'], 'classScheduleGradeFor_');
+assert(
+  classGradeLookup.includes('classScheduleIndexForDay_'),
+  'runtime grade inference must use the weekday Class Schedule index'
+);
+const classDayReader = functionBody(sources['class-schedule.gs'], 'readClassScheduleDayCache_');
+assert(
+  classDayReader.includes('rebuildClassScheduleDayCache_'),
+  'weekday Class Schedule cache must self-heal when stale'
+);
+const classDayBuilder = functionBody(sources['class-schedule.gs'], 'rebuildClassScheduleDayCacheUnlocked_');
+assert(
+  classDayBuilder.includes('Resolved_Staff') || sources['class-schedule.gs'].includes("'Resolved_Staff'"),
+  'Class Schedule cache must pre-resolve teacher names'
 );
 
 const poolRefresh = functionBody(sources['scheduler.gs'], 'ensureFieldTripCoveragePoolFresh_');
@@ -147,6 +186,16 @@ assert(
   'interactive Generate must not trigger a full-workbook pool rebuild'
 );
 
+const fastPoolRead = functionBody(sources['scheduler.gs'], 'readFieldTripCoveragePoolRowsForDateFast_');
+assert(
+  datePoolRefresh.includes('readFieldTripCoveragePoolRowsForDateFast_'),
+  'fresh field-trip pool reads must be date-scoped'
+);
+assert(
+  fastPoolRead.includes("getRange(2, dateColumn + 1"),
+  'date-scoped field-trip pool reader must scan only the Date column before reading matching rows'
+);
+
 const targetedPoolRebuild = functionBody(sources['scheduler.gs'], 'rebuildFieldTripCoveragePoolForDate_');
 assert(
   targetedPoolRebuild.includes('getFieldTripsForDate_'),
@@ -164,6 +213,26 @@ assert(
 assert(
   sources['handout.gs'].includes('Field trip form compaction failed:'),
   'handout generation must verify unused form removal'
+);
+
+assert(
+  index.includes('S.manualWorkspace=result.manualWorkspace||null'),
+  'browser must retain the generated manual-choice workspace'
+);
+assert(
+  index.includes('(data.dayStaffSchedules||[]).forEach'),
+  'browser must hydrate its local staff schedule cache from bootstrap'
+);
+const saveBlockStart = index.indexOf('function saveBlock()');
+const saveBlockEnd = index.indexOf('\nasync function generate()', saveBlockStart);
+const saveBlockBody = index.slice(saveBlockStart, saveBlockEnd);
+assert(
+  !saveBlockBody.includes('webValidateManualCoverageAssignment'),
+  'manual assignment modal Save must not make a redundant validation RPC'
+);
+assert(
+  saveBlockBody.includes('S.manualWorkspace=null'),
+  'manual changes must invalidate precomputed choices for subsequent blocks'
 );
 
 // Every browser gas("method") call must have a server-side function.

@@ -31,9 +31,28 @@ const CLASS_SCHEDULE_ALIASES_ = {
 };
 const CLASS_SCHEDULE_SPLIT_PATTERN_ = /^(split|various|multiple|mixed)\b/i;
 const SCHEDULE_CHECK_SHEET_ = 'Schedule Check';
+const CLASS_SCHEDULE_DAY_CACHE_DAYS_ = ['M', 'T', 'W', 'R', 'F'];
+const CLASS_SCHEDULE_DAY_CACHE_PREFIX_ = '_Class_';
+const CLASS_SCHEDULE_DAY_CACHE_REVISION_PROPERTY_ = 'CLASS_SCHEDULE_DAY_CACHE_REVISION';
+const CLASS_SCHEDULE_DAY_CACHE_DAY_REVISION_PREFIX_ = 'CLASS_SCHEDULE_DAY_CACHE_DAY_REVISION:';
+const CLASS_SCHEDULE_DAY_CACHE_HEADERS_ = [
+  'Class',
+  'Term',
+  'Day',
+  'Start',
+  'End',
+  'Teacher',
+  'Subject',
+  'Room',
+  'Grade',
+  'Resolved_Staff',
+  'Is_Split',
+  'Is_Lunch'
+];
 
-// Built once per server call.
+// Full validation index plus small weekday indexes, all request-local.
 let CLASS_SCHEDULE_CACHE_ = null;
+let CLASS_SCHEDULE_DAY_INDEX_CACHE_ = {};
 
 function classScheduleSheet_() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -43,6 +62,249 @@ function classScheduleSheet_() {
     if (sheet) return sheet;
   }
   return null;
+}
+
+function classScheduleDayCacheSheetName_(day) {
+  const code = String(day || '').trim().toUpperCase();
+  return CLASS_SCHEDULE_DAY_CACHE_DAYS_.indexOf(code) !== -1
+    ? CLASS_SCHEDULE_DAY_CACHE_PREFIX_ + code
+    : '';
+}
+
+function classScheduleDayCacheRevisionKey_(day) {
+  return CLASS_SCHEDULE_DAY_CACHE_DAY_REVISION_PREFIX_ + String(day || '').trim().toUpperCase();
+}
+
+function classScheduleDayCacheRevision_() {
+  const properties = PropertiesService.getScriptProperties();
+  let revision = properties.getProperty(CLASS_SCHEDULE_DAY_CACHE_REVISION_PROPERTY_);
+  if (revision) return revision;
+
+  revision = Utilities.getUuid();
+  properties.setProperty(CLASS_SCHEDULE_DAY_CACHE_REVISION_PROPERTY_, revision);
+
+  // A copied test workbook may already contain fully prepared weekday tabs.
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  CLASS_SCHEDULE_DAY_CACHE_DAYS_.forEach(day => {
+    const sheet = ss && ss.getSheetByName(classScheduleDayCacheSheetName_(day));
+    if (!sheet || sheet.getLastRow() < 2 || sheet.getLastColumn() < CLASS_SCHEDULE_DAY_CACHE_HEADERS_.length) return;
+    const headers = sheet.getRange(1, 1, 1, CLASS_SCHEDULE_DAY_CACHE_HEADERS_.length)
+      .getValues()[0]
+      .map(value => String(value || '').trim());
+    if (CLASS_SCHEDULE_DAY_CACHE_HEADERS_.every((header, index) => headers[index] === header)) {
+      properties.setProperty(classScheduleDayCacheRevisionKey_(day), revision);
+    }
+  });
+  return revision;
+}
+
+function markClassScheduleDayCachesDirty_() {
+  const properties = PropertiesService.getScriptProperties();
+  properties.setProperty(CLASS_SCHEDULE_DAY_CACHE_REVISION_PROPERTY_, Utilities.getUuid());
+  CLASS_SCHEDULE_DAY_INDEX_CACHE_ = {};
+  CLASS_SCHEDULE_CACHE_ = null;
+  CLASS_SCHEDULE_DAY_CACHE_DAYS_.forEach(day => {
+    if (typeof invalidateCoverageSheetCache_ === 'function') {
+      invalidateCoverageSheetCache_(classScheduleDayCacheSheetName_(day));
+    }
+  });
+}
+
+function classScheduleDayCacheIsFresh_(day) {
+  const code = String(day || '').trim().toUpperCase();
+  const name = classScheduleDayCacheSheetName_(code);
+  if (!name) return false;
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(name);
+  if (!sheet || sheet.getLastRow() < 2 || sheet.getLastColumn() < CLASS_SCHEDULE_DAY_CACHE_HEADERS_.length) return false;
+  return PropertiesService.getScriptProperties().getProperty(classScheduleDayCacheRevisionKey_(code)) ===
+    classScheduleDayCacheRevision_();
+}
+
+function markClassScheduleDayCacheFresh_(day) {
+  const code = String(day || '').trim().toUpperCase();
+  if (!classScheduleDayCacheSheetName_(code)) return;
+  PropertiesService.getScriptProperties().setProperty(
+    classScheduleDayCacheRevisionKey_(code),
+    classScheduleDayCacheRevision_()
+  );
+}
+
+function ensureClassScheduleDayCacheSheet_(day) {
+  const code = String(day || '').trim().toUpperCase();
+  const name = classScheduleDayCacheSheetName_(code);
+  if (!name) throw new Error('Invalid Class Schedule cache day: ' + day);
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName(name);
+  if (!sheet) sheet = ss.insertSheet(name);
+  if (sheet.getMaxColumns() < CLASS_SCHEDULE_DAY_CACHE_HEADERS_.length) {
+    sheet.insertColumnsAfter(sheet.getMaxColumns(), CLASS_SCHEDULE_DAY_CACHE_HEADERS_.length - sheet.getMaxColumns());
+  }
+  sheet.getRange(1, 1, 1, CLASS_SCHEDULE_DAY_CACHE_HEADERS_.length)
+    .setValues([CLASS_SCHEDULE_DAY_CACHE_HEADERS_])
+    .setFontWeight('bold');
+  sheet.setFrozenRows(1);
+  if (!sheet.isSheetHidden()) sheet.hideSheet();
+  return sheet;
+}
+
+function teacherScheduleNamesForClassResolution_() {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Teacher Schedule');
+  if (!sheet || sheet.getLastRow() < 2) return [];
+  const values = sheet.getRange(2, 1, sheet.getLastRow() - 1, 1).getValues();
+  return Array.from(new Set(
+    values.map(row => String(row[0] || '').trim()).filter(Boolean)
+  )).sort();
+}
+
+function rebuildClassScheduleDayCache_(day) {
+  const code = String(day || '').trim().toUpperCase();
+  if (!classScheduleDayCacheSheetName_(code)) return [];
+
+  return typeof withCoverageLock_ === 'function' ? withCoverageLock_(() => {
+    return rebuildClassScheduleDayCacheUnlocked_(code);
+  }) : rebuildClassScheduleDayCacheUnlocked_(code);
+}
+
+function rebuildClassScheduleDayCacheUnlocked_(code) {
+  const sourceSheet = classScheduleSheet_();
+  if (!sourceSheet || sourceSheet.getLastRow() < 2) return [];
+
+  const width = Math.min(8, sourceSheet.getLastColumn());
+  const values = sourceSheet.getRange(1, 1, sourceSheet.getLastRow(), width).getValues();
+  const headers = values[0].map(value => String(value || '').trim());
+  const col = {};
+  Object.keys(CLASS_SCHEDULE_ALIASES_).forEach(key => {
+    col[key] = findColumnByAliases_(headers, CLASS_SCHEDULE_ALIASES_[key]);
+  });
+  if (col.Class === -1 || col.Day === -1 || col.Start === -1 || col.End === -1) {
+    throw new Error(sourceSheet.getName() + ' needs Class, Day, Start, and End columns.');
+  }
+
+  const resolve = buildStaffNameResolver_(teacherScheduleNamesForClassResolution_());
+  const cell = (row, key) => col[key] === -1 ? '' : row[col[key]];
+  const prepared = [];
+
+  values.slice(1).forEach(row => {
+    if (String(cell(row, 'Day') || '').trim().toUpperCase() !== code) return;
+    const section = String(cell(row, 'Class') || '').trim();
+    if (!section) return;
+    const teacherText = String(cell(row, 'Teacher') || '').trim();
+    const tokens = splitTeacherList_(teacherText);
+    const resolved = Array.from(new Set(
+      tokens.map(token => resolve(token)).filter(result => result && result.name).map(result => result.name)
+    ));
+    const subject = String(cell(row, 'Subject') || '').trim();
+
+    prepared.push([
+      section,
+      cell(row, 'Term') || '',
+      code,
+      cell(row, 'Start') || '',
+      cell(row, 'End') || '',
+      teacherText,
+      subject,
+      String(cell(row, 'Room') == null ? '' : cell(row, 'Room')).trim(),
+      inferGradeFromClass_(section),
+      resolved.join(' | '),
+      CLASS_SCHEDULE_SPLIT_PATTERN_.test(teacherText) ? 'Yes' : 'No',
+      /lunch/i.test(subject) ? 'Yes' : 'No'
+    ]);
+  });
+
+  const sheet = ensureClassScheduleDayCacheSheet_(code);
+  const previousLastRow = sheet.getLastRow();
+  if (prepared.length) {
+    sheet.getRange(2, 1, prepared.length, CLASS_SCHEDULE_DAY_CACHE_HEADERS_.length).setValues(prepared);
+    sheet.getRange(2, 4, prepared.length, 2).setNumberFormat('h:mm AM/PM');
+    if (typeof incrementCoverageMetric_ === 'function') incrementCoverageMetric_('sheetWrites');
+  }
+  if (previousLastRow > prepared.length + 1) {
+    sheet.getRange(
+      prepared.length + 2,
+      1,
+      previousLastRow - prepared.length - 1,
+      CLASS_SCHEDULE_DAY_CACHE_HEADERS_.length
+    ).clearContent();
+    if (typeof incrementCoverageMetric_ === 'function') incrementCoverageMetric_('sheetWrites');
+  }
+  if (!sheet.isSheetHidden()) sheet.hideSheet();
+
+  if (typeof invalidateCoverageSheetCache_ === 'function') {
+    invalidateCoverageSheetCache_(classScheduleDayCacheSheetName_(code));
+  }
+  markClassScheduleDayCacheFresh_(code);
+  CLASS_SCHEDULE_DAY_INDEX_CACHE_[code] = null;
+  if (typeof coveragePerfMark_ === 'function') coveragePerfMark_('class-schedule-' + code + '-rebuilt');
+  return prepared;
+}
+
+function readClassScheduleDayCache_(day) {
+  const code = String(day || '').trim().toUpperCase();
+  const name = classScheduleDayCacheSheetName_(code);
+  if (!name) return [];
+
+  if (!classScheduleDayCacheIsFresh_(code)) rebuildClassScheduleDayCache_(code);
+
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(name);
+  if (!sheet || sheet.getLastRow() < 2) return [];
+  if (typeof incrementCoverageMetric_ === 'function') incrementCoverageMetric_('sheetReads');
+  const values = sheet.getRange(
+    2, 1, sheet.getLastRow() - 1, CLASS_SCHEDULE_DAY_CACHE_HEADERS_.length
+  ).getValues();
+
+  return values.map((row, index) => ({
+    rowNumber: index + 2,
+    section: String(row[0] || '').trim(),
+    grade: String(row[8] || '').trim(),
+    term: normalizeScheduleTerm_(row[1]),
+    day: code,
+    startMinutes: timeToMinutes_(row[3]),
+    endMinutes: timeToMinutes_(row[4]),
+    teacherText: String(row[5] || '').trim(),
+    teacherTokens: splitTeacherList_(row[5]),
+    staffNames: String(row[9] || '').split('|').map(name => name.trim()).filter(Boolean),
+    subject: String(row[6] || '').trim(),
+    room: String(row[7] == null ? '' : row[7]).trim(),
+    isSplit: normalizeYesNo_(row[10], false),
+    isLunch: normalizeYesNo_(row[11], false)
+  })).filter(row => row.section);
+}
+
+function classScheduleIndexForDay_(day) {
+  const code = String(day || '').trim().toUpperCase();
+  if (!code) return { rows: [], byStaffDay: {} };
+  if (CLASS_SCHEDULE_DAY_INDEX_CACHE_[code]) return CLASS_SCHEDULE_DAY_INDEX_CACHE_[code];
+
+  const rows = readClassScheduleDayCache_(code);
+  const index = { rows: rows, byStaffDay: {} };
+  rows.forEach(row => {
+    (row.staffNames || []).forEach(name => {
+      const key = name + '\u0000' + code;
+      (index.byStaffDay[key] || (index.byStaffDay[key] = [])).push(row);
+    });
+  });
+  CLASS_SCHEDULE_DAY_INDEX_CACHE_[code] = index;
+  return index;
+}
+
+function rebuildAllClassScheduleDayCaches_() {
+  const counts = {};
+  CLASS_SCHEDULE_DAY_CACHE_DAYS_.forEach(day => {
+    counts[day] = rebuildClassScheduleDayCache_(day).length;
+  });
+  return counts;
+}
+
+function menuRebuildClassScheduleDayCaches() {
+  const counts = rebuildAllClassScheduleDayCaches_();
+  SpreadsheetApp.getActiveSpreadsheet().toast(
+    'Class caches rebuilt: ' +
+      CLASS_SCHEDULE_DAY_CACHE_DAYS_.map(day => day + ' ' + counts[day]).join(' · '),
+    APP_TITLE,
+    8
+  );
+  return counts;
 }
 
 function splitTeacherList_(text) {
@@ -204,7 +466,7 @@ function classScheduleIndex_() {
 // grade and stays uncancellable (covered, never silently dropped).
 function classScheduleGradeFor_(row) {
   if (!row || !row.staffName || !row.day || row.startMinutes == null || row.endMinutes == null) return null;
-  const candidates = classScheduleIndex_().byStaffDay[row.staffName + '\u0000' + row.day] || [];
+  const candidates = classScheduleIndexForDay_(row.day).byStaffDay[row.staffName + '\u0000' + row.day] || [];
   const hits = candidates.filter(c =>
     c.startMinutes != null &&
     c.endMinutes != null &&

@@ -1,4 +1,4 @@
-const COVERAGE_WEB_API_VERSION = 12;
+const COVERAGE_WEB_API_VERSION = 13;
 
 const APP_TITLE = 'Coverage Scheduler';
 const COVERAGE_SPREADSHEET_PROPERTY = 'COVERAGE_SPREADSHEET_ID';
@@ -14,6 +14,7 @@ function onOpen() {
     .addItem('Set up workbook', 'setupCoverageScheduler')
     .addItem('Validate teacher schedule', 'menuValidateTeacherScheduleSource')
     .addItem('Rebuild schedule day caches', 'menuRebuildTeacherScheduleDayCaches')
+    .addItem('Rebuild class day caches', 'menuRebuildClassScheduleDayCaches')
     .addSeparator()
     .addItem('Generate preview for selected day', 'generateCoveragePreviewFromPrompt')
     .addItem('Rebuild field trip coverage pool', 'menuRebuildFieldTripCoveragePool')
@@ -31,9 +32,13 @@ function onEdit(e) {
     if (sheet) {
       const sheetName = sheet.getName();
       invalidateCoverageSheetCache_(sheetName);
-      if (['Teacher Schedule', 'Class Schedule', 'Copy of Class Schedule'].indexOf(sheetName) !== -1 &&
+      if (['Teacher Schedule', 'Class Schedule', 'Copy of Class Schedule', 'Config'].indexOf(sheetName) !== -1 &&
           typeof markTeacherScheduleCacheDirty_ === 'function') {
         markTeacherScheduleCacheDirty_();
+      }
+      if (['Teacher Schedule', 'Class Schedule', 'Copy of Class Schedule'].indexOf(sheetName) !== -1 &&
+          typeof markClassScheduleDayCachesDirty_ === 'function') {
+        markClassScheduleDayCachesDirty_();
       }
       if (['Teacher Schedule', 'Class Schedule', 'Copy of Class Schedule', 'Field Trips', 'Config', 'Coverage Staff', 'Substitute Availability', 'Substitutes'].indexOf(sheetName) !== -1) {
         markFieldTripCoveragePoolDirty_();
@@ -693,7 +698,10 @@ function webSaveAbsenceRangeUnlocked_(payload) {
 }
 
 function webGenerateCoverage(payload) {
-  return runCoverageWebRequest_('webGenerateCoverage', () => generateCoveragePreview(payload || {}));
+  return runCoverageWebRequest_('webGenerateCoverage', () => {
+    const request = Object.assign({}, payload || {}, { persistPreview: false });
+    return generateCoveragePreview(request);
+  });
 }
 
 function webGetManualCoverageChoices(payload) {
@@ -800,7 +808,7 @@ function generateCoveragePreviewFromPrompt() {
     return;
   }
 
-  const result = generateCoveragePreview({ date: dateStr, day: dayCode });
+  const result = generateCoveragePreview({ date: dateStr, day: dayCode, persistPreview: true });
   ui.alert(
     'Preview complete',
     'Generated ' + result.summary.totalBlocks + ' block(s). Open the Coverage Scheduler web app to review, adjust, and save the plan.',
@@ -818,7 +826,6 @@ function getCoverageBootstrap_(payload) {
     'Substitute Availability',
     'Daily Absences',
     'Field Trips',
-    '_Preview',
     'Config'
   ]);
   coveragePerfMark_('snapshot-loaded');
@@ -830,12 +837,19 @@ function getCoverageBootstrap_(payload) {
     allStaff: includeRoster && typeof getWebStaffRosterSummary_ === 'function'
       ? getWebStaffRosterSummary_()
       : null,
+    // Send the selected day's compact schedules once so absence editing does
+    // not need a separate Apps Script round trip for each teacher.
+    dayStaffSchedules: typeof getWebStaffRoster_ === 'function'
+      ? getWebStaffRoster_(dayCode)
+      : [],
     allCoverageStaff: getAllCoverageStaff_(today, dayCode),
     // Date navigation must stay cheap. Field-trip candidate materialization is
     // needed only by Generate/manual reassignment, not to display the day.
     currentAbsences: getDailyAbsencesForDate_(today, dayCode),
     currentFieldTrips: getFieldTripsForDate_(today),
-    currentPreview: getLatestPreview_(today, dayCode),
+    // Web plans live in the browser until Save. Do not read the shared _Preview
+    // scratch sheet on every date navigation.
+    currentPreview: { rows: [], summary: { totalBlocks: 0, assignedBlocks: 0, unfilledBlocks: 0 } },
     config: getConfigMap_()
   };
 }
