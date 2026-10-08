@@ -1,3 +1,5 @@
+const COVERAGE_SCHEDULER_MODULE_VERSION = 1;
+
 const HEADER_ALIASES = {
   'Teacher Schedule': {
     Staff_Name: ['Staff_Name', 'Teacher', 'Teacher_Name', 'Name'],

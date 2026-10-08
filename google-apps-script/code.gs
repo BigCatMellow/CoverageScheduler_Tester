@@ -522,6 +522,13 @@ function makeWebSafe_(value) {
 
 function webGetBootstrap(payload) {
   return runCoverageWebRequest_('webGetBootstrap', () => {
+    if (typeof COVERAGE_SCHEDULER_MODULE_VERSION === 'undefined' ||
+        COVERAGE_SCHEDULER_MODULE_VERSION !== 1) {
+      throw new Error(
+        'Coverage Scheduler deployment is out of sync: scheduler.gs is not the current saved-plan module. Deploy every file in google-apps-script together as one new version.'
+      );
+    }
+
     if (typeof FIELD_TRIP_HANDOUT_MODULE_VERSION === 'undefined' ||
         FIELD_TRIP_HANDOUT_MODULE_VERSION !== 5) {
       throw new Error(
