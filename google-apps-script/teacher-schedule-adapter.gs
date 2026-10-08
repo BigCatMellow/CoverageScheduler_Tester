@@ -69,6 +69,9 @@ function setupCoverageWorkbookFromTeacherSchedule() {
   if (typeof markTeacherScheduleCacheDirty_ === 'function') {
     markTeacherScheduleCacheDirty_();
   }
+  if (typeof markClassScheduleDayCachesDirty_ === 'function') {
+    markClassScheduleDayCachesDirty_();
+  }
   if (typeof markFieldTripCoveragePoolDirty_ === 'function') {
     markFieldTripCoveragePoolDirty_();
   }
