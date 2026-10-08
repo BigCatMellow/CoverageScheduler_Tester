@@ -180,6 +180,8 @@ function createFieldTripCoverageFormDocs_(rows, trip, date, day, context, folder
     }
   });
 
+  removeGeneratedFieldTripStarterParagraph_(body);
+
   if (body.getTables().length !== formUnits.length) {
     throw new Error(
       'Field trip handout build failed: expected ' + formUnits.length +
@@ -200,6 +202,19 @@ function createFieldTripCoverageFormDocs_(rows, trip, date, day, context, folder
     folderUrl: folder.getUrl(),
     folderName: folder.getName()
   }];
+}
+
+function removeGeneratedFieldTripStarterParagraph_(body) {
+  // DocumentApp.create() starts every new Doc with one empty paragraph.
+  // Once the generated forms exist, remove only that original leading blank
+  // so the first form starts at the same vertical position as the reference.
+  if (body.getNumChildren() <= 1) return;
+
+  const first = body.getChild(0);
+  if (first.getType() !== DocumentApp.ElementType.PARAGRAPH) return;
+  if (String(first.asParagraph().getText() || '').trim()) return;
+
+  body.removeChild(first);
 }
 
 function formatGeneratedFieldTripHandoutPage_(body) {
