@@ -1635,6 +1635,56 @@ function ensureFieldTripCoveragePoolFresh_() {
   });
 }
 
+function readFieldTripCoveragePoolRowsForDateFast_(date) {
+  const key = normalizeDateKey_(date);
+  if (!key) return [];
+
+  // If this request already needed the full pool, reuse it.
+  if (Object.prototype.hasOwnProperty.call(COVERAGE_REQUEST_SHEET_CACHE_, FIELD_TRIP_COVERAGE_POOL_SHEET_)) {
+    incrementCoverageMetric_('requestCacheHits');
+    return COVERAGE_REQUEST_SHEET_CACHE_[FIELD_TRIP_COVERAGE_POOL_SHEET_]
+      .filter(row => normalizeDateKey_(row.Date) === key);
+  }
+
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(FIELD_TRIP_COVERAGE_POOL_SHEET_);
+  if (!sheet || sheet.getLastRow() < 2) return [];
+
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn())
+    .getValues()[0]
+    .map(value => String(value || '').trim());
+  const aliases = HEADER_ALIASES[FIELD_TRIP_COVERAGE_POOL_SHEET_];
+  const dateColumn = findColumnByAliases_(headers, aliases.Date);
+  if (dateColumn === -1) return [];
+
+  incrementCoverageMetric_('sheetReads');
+  const dates = sheet.getRange(2, dateColumn + 1, sheet.getLastRow() - 1, 1).getValues();
+  const matches = [];
+  dates.forEach((row, index) => {
+    if (normalizeDateKey_(row[0]) === key) matches.push(index + 2);
+  });
+  if (!matches.length) return [];
+
+  // Pool rows are sorted, so a date is normally contiguous. Reading the span
+  // and filtering is still safe if an operator has manually disturbed the sort.
+  const first = matches[0];
+  const last = matches[matches.length - 1];
+  incrementCoverageMetric_('sheetReads');
+  const values = sheet.getRange(first, 1, last - first + 1, headers.length).getValues();
+
+  const columnByCanonical = {};
+  Object.keys(aliases).forEach(canonical => {
+    columnByCanonical[canonical] = findColumnByAliases_(headers, aliases[canonical]);
+  });
+  return values.map(row => {
+    const out = {};
+    Object.keys(columnByCanonical).forEach(canonical => {
+      const index = columnByCanonical[canonical];
+      out[canonical] = index === -1 ? '' : row[index];
+    });
+    return out;
+  }).filter(row => normalizeDateKey_(row.Date) === key);
+}
+
 function fieldTripCoveragePoolRowsForDate_(date) {
   const key = normalizeDateKey_(date);
   if (!key) return [];
@@ -1642,8 +1692,7 @@ function fieldTripCoveragePoolRowsForDate_(date) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const hasSheet = !!ss.getSheetByName(FIELD_TRIP_COVERAGE_POOL_SHEET_);
   if (hasSheet && fieldTripCoveragePoolDateIsFresh_(key)) {
-    return readSheetObjects_(FIELD_TRIP_COVERAGE_POOL_SHEET_)
-      .filter(row => normalizeDateKey_(row.Date) === key);
+    return readFieldTripCoveragePoolRowsForDateFast_(key);
   }
 
   // Source/config changes invalidate the pool globally, but Generate only needs
@@ -1654,8 +1703,7 @@ function fieldTripCoveragePoolRowsForDate_(date) {
     const current = SpreadsheetApp.getActiveSpreadsheet();
     if (current.getSheetByName(FIELD_TRIP_COVERAGE_POOL_SHEET_) &&
         fieldTripCoveragePoolDateIsFresh_(key)) {
-      return readSheetObjects_(FIELD_TRIP_COVERAGE_POOL_SHEET_)
-        .filter(row => normalizeDateKey_(row.Date) === key);
+      return readFieldTripCoveragePoolRowsForDateFast_(key);
     }
     return rebuildFieldTripCoveragePoolForDate_(key);
   });
@@ -2420,7 +2468,7 @@ function planRowToLiveBlock_(row, liveContext) {
   return block;
 }
 
-function manualCoverageContext_(payload) {
+function manualCoverageContext_(payload, liveOverride) {
   payload = payload || {};
   const date = normalizeDateKey_(payload.date);
   const day = String(payload.day || guessDayCodeFromDate_(date) || '').trim();
@@ -2432,7 +2480,7 @@ function manualCoverageContext_(payload) {
     throw new Error('The coverage block could not be identified.');
   }
 
-  const live = buildCoverageLiveContext_(date, day);
+  const live = liveOverride || buildCoverageLiveContext_(date, day);
   const row = planRows[blockIndex] || {};
   const block = planRowToLiveBlock_(row, live);
   if (block.startMinutes == null || block.endMinutes == null) {
@@ -2589,8 +2637,9 @@ function describeStaffDayForDisplay_(teacherSchedule, day, staffName, fieldTrips
   });
 }
 
-function getManualCoverageChoices_(payload) {
-  const context = manualCoverageContext_(payload);
+function getManualCoverageChoices_(payload, liveOverride, options) {
+  options = options || {};
+  const context = manualCoverageContext_(payload, liveOverride);
   const row = context.row;
   const block = context.block;
   const absentName = String(row.Absent_Staff || '').trim();
@@ -2679,11 +2728,12 @@ function getManualCoverageChoices_(payload) {
 
   // One schedule per name that could appear in the dropdown, including the
   // current assignee even if they're shown disabled as "currently
-  // unavailable" — seeing their day often explains why.
+  // unavailable" — seeing their day often explains why. Generate can skip
+  // this per-block copy and build one shared browser workspace instead.
   const namesToDescribe = new Set(choices.map(choice => choice.name));
   if (currentName) namesToDescribe.add(currentName);
   const schedules = {};
-  namesToDescribe.forEach(name => {
+  if (options.includeSchedules !== false) namesToDescribe.forEach(name => {
     let reservations = candidateBreakReservations_(name, context.state);
     // The state replay above deliberately excludes this block's own current
     // assignment (so every other candidate can be evaluated as if it were
@@ -2728,6 +2778,66 @@ function getManualCoverageChoices_(payload) {
     choices: choices,
     schedules: schedules,
     excludedAbsentNames: Array.from(new Set(absentDuringBlock)).sort()
+  };
+}
+
+function buildManualChoiceWorkspace_(planRows, liveContext) {
+  const rows = Array.isArray(planRows) ? planRows : [];
+  if (!rows.length || rows.length > 40) return null;
+
+  const blocks = {};
+  const names = new Set();
+
+  rows.forEach((row, index) => {
+    try {
+      const result = getManualCoverageChoices_({
+        date: liveContext.date,
+        day: liveContext.day,
+        rows: rows,
+        blockIndex: index
+      }, liveContext, { includeSchedules: false });
+
+      blocks[index] = {
+        blockIndex: index,
+        currentName: result.currentName || '',
+        currentEligible: result.currentEligible !== false,
+        choices: result.choices || [],
+        excludedAbsentNames: result.excludedAbsentNames || []
+      };
+      (result.choices || []).forEach(choice => {
+        if (choice && choice.name) names.add(choice.name);
+      });
+      if (result.currentName) names.add(result.currentName);
+    } catch (error) {
+      // A single unusual block should not slow/fail Generate. The browser will
+      // transparently fall back to the live endpoint for that block.
+    }
+  });
+
+  const fullState = manualCoverageStateFromPlan_(
+    rows,
+    -1,
+    liveContext.candidates,
+    liveContext.teacherSchedule,
+    liveContext.day,
+    liveContext.effectiveAbsences
+  );
+  const schedules = {};
+  names.forEach(name => {
+    schedules[name] = describeStaffDayForDisplay_(
+      liveContext.teacherSchedule,
+      liveContext.day,
+      name,
+      liveContext.fieldTrips,
+      candidateBreakReservations_(name, fullState)
+    );
+  });
+
+  return {
+    date: liveContext.date,
+    day: liveContext.day,
+    blocks: blocks,
+    schedules: schedules
   };
 }
 
@@ -2908,6 +3018,13 @@ function fillDeferredFieldTripNeeds_(
 
 function generateCoveragePreview(payload) {
   const generateStartedAt = Date.now();
+  let timingCursor = generateStartedAt;
+  const timingMs = {};
+  const timingMark = name => {
+    const now = Date.now();
+    timingMs[name] = now - timingCursor;
+    timingCursor = now;
+  };
   payload = payload || {};
   const date = payload.date || Utilities.formatDate(new Date(), coverageTimeZone_(), 'yyyy-MM-dd');
   const day = payload.day || guessDayCodeFromDate_(date);
@@ -2920,9 +3037,11 @@ function generateCoveragePreview(payload) {
     'Config'
   ]);
   coveragePerfMark_('snapshot-loaded');
+  timingMark('snapshot');
 
   const config = getConfigMap_();
   const teacherSchedule = teacherScheduleRowsForDate_(date, day, config);
+  timingMark('teacherSchedule');
   const configuredCoverageStaff = getCoverageStaffForDate_(date, day, config);
   const activeCoverageStaff = configuredCoverageStaff.filter(row => row.name && row.activeToday);
   const absences = getDailyAbsencesForDate_(date, day);
@@ -2930,6 +3049,7 @@ function generateCoveragePreview(payload) {
   const fieldTripAbsences = buildFieldTripParticipantAbsences_(fieldTrips, teacherSchedule, day);
   const effectiveAbsences = absences.concat(fieldTripAbsences);
   const fieldTripPoolRows = fieldTrips.length ? fieldTripCoveragePoolRowsForDate_(date) : [];
+  timingMark('dayInputsAndFieldTripPool');
   const coverageStaff = buildFieldTripCoverageCandidatesFromPool_(
     fieldTrips,
     date,
@@ -2944,6 +3064,7 @@ function generateCoveragePreview(payload) {
     day,
     fieldTrips
   );
+  timingMark('coverageNeeds');
 
   const state = makeEmptyState_();
   state.absencesByCandidate = buildAbsenceWindowsByStaff_(effectiveAbsences);
@@ -3198,15 +3319,30 @@ function generateCoveragePreview(payload) {
   }
 
   coveragePerfMark_('schedule-built');
-  writePreview_(planRows);
-  coveragePerfMark_('preview-written');
+  timingMark('scheduler');
+
+  let manualWorkspace = null;
+  if (planRows.length && planRows.length <= 40) {
+    const liveForWorkspace = buildCoverageLiveContext_(date, day);
+    manualWorkspace = buildManualChoiceWorkspace_(planRows, liveForWorkspace);
+  }
+  timingMark('manualWorkspace');
+
+  if (payload.persistPreview === true) {
+    writePreview_(planRows);
+    coveragePerfMark_('preview-written');
+  }
+  timingMark('previewWrite');
+
   summary.elapsedMs = Date.now() - generateStartedAt;
+  summary.timingMs = timingMs;
 
   return {
     date: date,
     day: day,
     summary: summary,
     rows: planRows,
+    manualWorkspace: manualWorkspace,
     absences: absences,
     fieldTrips: fieldTrips,
     activeCoverageStaff: coverageStaff.map(row => ({
