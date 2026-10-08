@@ -145,6 +145,25 @@ const FIELD_TRIP_COVERAGE_POOL_DIRTY_PROPERTY_ = 'FIELD_TRIP_COVERAGE_POOL_DIRTY
 const FIELD_TRIP_COVERAGE_POOL_REVISION_PROPERTY_ = 'FIELD_TRIP_COVERAGE_POOL_REVISION';
 const FIELD_TRIP_COVERAGE_POOL_DATE_REVISION_PREFIX_ = 'FIELD_TRIP_COVERAGE_POOL_DATE_REVISION:';
 
+const TEACHER_SCHEDULE_CACHE_DAYS_ = ['M', 'T', 'W', 'R', 'F'];
+const TEACHER_SCHEDULE_CACHE_SHEET_PREFIX_ = '_Schedule_';
+const TEACHER_SCHEDULE_CACHE_REVISION_PROPERTY_ = 'TEACHER_SCHEDULE_CACHE_REVISION';
+const TEACHER_SCHEDULE_CACHE_DAY_REVISION_PREFIX_ = 'TEACHER_SCHEDULE_CACHE_DAY_REVISION:';
+const TEACHER_SCHEDULE_CACHE_HEADERS_ = [
+  'Teacher',
+  'Term',
+  'Day',
+  'Start',
+  'End',
+  'Class',
+  'Subject',
+  'Room',
+  'Grade',
+  'Assignment_Type',
+  'Needs_Coverage_If_Absent',
+  'Cover_Eligible_This_Block'
+];
+
 let COVERAGE_REQUEST_SHEET_CACHE_ = {};
 let COVERAGE_REQUEST_METRICS_ = null;
 let COVERAGE_PERF_TRACE_ = null;
@@ -644,18 +663,268 @@ function getCoverageStaffSheetName_() {
   throw new Error('Missing sheet: Coverage Staff (or Substitutes)');
 }
 
-// Compatibility helper for deployments or performance code that ask for the
-// Teacher Schedule through a named cached-read path. The canonical sheet reader
-// remains readSheetObjects_(), so this stays correct whether caching is enabled
-// there or not.
+// ── Persistent per-day Teacher Schedule cache ─────────────────────────────
+// Teacher Schedule is the authoritative source, but normal front-office actions
+// should never rescan all ~5,500 rows. Each weekday gets a hidden prepared sheet
+// with the derived fields normalizeTeacherScheduleRow_ would otherwise rebuild
+// on every request. Editing Teacher Schedule or Class Schedule changes the
+// revision; only the next requested weekday is rebuilt.
+function teacherScheduleCacheSheetName_(day) {
+  const code = String(day || '').trim().toUpperCase();
+  return TEACHER_SCHEDULE_CACHE_DAYS_.indexOf(code) !== -1
+    ? TEACHER_SCHEDULE_CACHE_SHEET_PREFIX_ + code
+    : '';
+}
+
+function teacherScheduleCacheDayRevisionKey_(day) {
+  return TEACHER_SCHEDULE_CACHE_DAY_REVISION_PREFIX_ + String(day || '').trim().toUpperCase();
+}
+
+function teacherScheduleCacheRevision_() {
+  const properties = PropertiesService.getScriptProperties();
+  let revision = properties.getProperty(TEACHER_SCHEDULE_CACHE_REVISION_PROPERTY_);
+  if (revision) return revision;
+
+  revision = Utilities.getUuid();
+  properties.setProperty(TEACHER_SCHEDULE_CACHE_REVISION_PROPERTY_, revision);
+
+  // A copied/test workbook may already contain cache tabs built from its current
+  // Teacher Schedule. Trust them only when they contain the full prepared header.
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  TEACHER_SCHEDULE_CACHE_DAYS_.forEach(day => {
+    const sheet = ss && ss.getSheetByName(teacherScheduleCacheSheetName_(day));
+    if (!sheet || sheet.getLastRow() < 2 || sheet.getLastColumn() < TEACHER_SCHEDULE_CACHE_HEADERS_.length) return;
+    const headers = sheet.getRange(1, 1, 1, TEACHER_SCHEDULE_CACHE_HEADERS_.length)
+      .getValues()[0]
+      .map(value => String(value || '').trim());
+    if (TEACHER_SCHEDULE_CACHE_HEADERS_.every((header, index) => headers[index] === header)) {
+      properties.setProperty(teacherScheduleCacheDayRevisionKey_(day), revision);
+    }
+  });
+  return revision;
+}
+
+function markTeacherScheduleCacheDirty_() {
+  const properties = PropertiesService.getScriptProperties();
+  properties.setProperty(TEACHER_SCHEDULE_CACHE_REVISION_PROPERTY_, Utilities.getUuid());
+  invalidateCoverageSheetCache_('Teacher Schedule');
+  TEACHER_SCHEDULE_CACHE_DAYS_.forEach(day => {
+    invalidateCoverageSheetCache_(teacherScheduleCacheSheetName_(day));
+  });
+}
+
+function teacherScheduleCacheDayIsFresh_(day) {
+  const code = String(day || '').trim().toUpperCase();
+  const sheetName = teacherScheduleCacheSheetName_(code);
+  if (!sheetName) return false;
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(sheetName);
+  if (!sheet || sheet.getLastRow() < 2 || sheet.getLastColumn() < TEACHER_SCHEDULE_CACHE_HEADERS_.length) return false;
+  return PropertiesService.getScriptProperties()
+    .getProperty(teacherScheduleCacheDayRevisionKey_(code)) === teacherScheduleCacheRevision_();
+}
+
+function markTeacherScheduleCacheDayFresh_(day) {
+  const code = String(day || '').trim().toUpperCase();
+  if (!teacherScheduleCacheSheetName_(code)) return;
+  PropertiesService.getScriptProperties().setProperty(
+    teacherScheduleCacheDayRevisionKey_(code),
+    teacherScheduleCacheRevision_()
+  );
+}
+
+function ensureTeacherScheduleCacheSheet_(day) {
+  const code = String(day || '').trim().toUpperCase();
+  const name = teacherScheduleCacheSheetName_(code);
+  if (!name) throw new Error('Invalid Teacher Schedule cache day: ' + day);
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName(name);
+  if (!sheet) sheet = ss.insertSheet(name);
+
+  if (sheet.getMaxColumns() < TEACHER_SCHEDULE_CACHE_HEADERS_.length) {
+    sheet.insertColumnsAfter(sheet.getMaxColumns(), TEACHER_SCHEDULE_CACHE_HEADERS_.length - sheet.getMaxColumns());
+  }
+  sheet.getRange(1, 1, 1, TEACHER_SCHEDULE_CACHE_HEADERS_.length)
+    .setValues([TEACHER_SCHEDULE_CACHE_HEADERS_])
+    .setFontWeight('bold');
+  sheet.setFrozenRows(1);
+  if (!sheet.isSheetHidden()) sheet.hideSheet();
+  return sheet;
+}
+
+function rawTeacherScheduleRows_() {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Teacher Schedule');
+  if (!sheet) throw new Error('Missing Teacher Schedule sheet.');
+  if (sheet.getLastRow() < 2) return { headers: [], rows: [] };
+
+  // Deliberately stop at H. Column I is the Lead/Co spill formula and is not
+  // consumed by the scheduler; reading it forces needless formula evaluation.
+  const width = Math.min(8, sheet.getLastColumn());
+  incrementCoverageMetric_('sheetReads');
+  const values = sheet.getRange(1, 1, sheet.getLastRow(), width).getValues();
+  return {
+    headers: values[0].map(value => String(value || '').trim()),
+    rows: values.slice(1)
+  };
+}
+
+function rebuildTeacherScheduleDayCache_(day) {
+  const code = String(day || '').trim().toUpperCase();
+  if (!teacherScheduleCacheSheetName_(code)) return [];
+
+  return withCoverageLock_(() => {
+    const source = rawTeacherScheduleRows_();
+    const headers = source.headers;
+    const aliasMap = HEADER_ALIASES['Teacher Schedule'];
+    const col = {};
+    Object.keys(aliasMap).forEach(key => {
+      col[key] = findColumnByAliases_(headers, aliasMap[key]);
+    });
+    if (col.Staff_Name === -1 || col.Day === -1 || col.Start === -1 || col.End === -1) {
+      throw new Error('Teacher Schedule needs Teacher, Day, Start, and End columns.');
+    }
+
+    const value = (row, key) => col[key] === -1 ? '' : row[col[key]];
+    const prepared = [];
+    source.rows.forEach(row => {
+      if (String(value(row, 'Day') || '').trim().toUpperCase() !== code) return;
+      const raw = {
+        Staff_Name: value(row, 'Staff_Name'),
+        Role: value(row, 'Role'),
+        Term: value(row, 'Term'),
+        Day: value(row, 'Day'),
+        Start: value(row, 'Start'),
+        End: value(row, 'End'),
+        Class: value(row, 'Class'),
+        Grade: value(row, 'Grade'),
+        Subject: value(row, 'Subject'),
+        Assignment_Type: value(row, 'Assignment_Type'),
+        Room: value(row, 'Room'),
+        Needs_Coverage_If_Absent: value(row, 'Needs_Coverage_If_Absent'),
+        Cover_Eligible_This_Block: value(row, 'Cover_Eligible_This_Block')
+      };
+      const normalized = normalizeTeacherScheduleRow_(raw);
+      prepared.push([
+        normalized.staffName,
+        raw.Term || '',
+        code,
+        raw.Start || '',
+        raw.End || '',
+        raw.Class || '',
+        normalized.subject,
+        normalized.room,
+        normalized.grade,
+        normalized.assignmentType,
+        normalized.needsCoverageIfAbsent ? 'Yes' : 'No',
+        normalized.coverEligibleThisBlock ? 'Yes' : 'No'
+      ]);
+    });
+
+    const sheet = ensureTeacherScheduleCacheSheet_(code);
+    const previousLastRow = sheet.getLastRow();
+    if (prepared.length) {
+      sheet.getRange(2, 1, prepared.length, TEACHER_SCHEDULE_CACHE_HEADERS_.length).setValues(prepared);
+      sheet.getRange(2, 4, prepared.length, 2).setNumberFormat('h:mm AM/PM');
+      incrementCoverageMetric_('sheetWrites');
+    }
+    if (previousLastRow > prepared.length + 1) {
+      sheet.getRange(
+        prepared.length + 2,
+        1,
+        previousLastRow - prepared.length - 1,
+        TEACHER_SCHEDULE_CACHE_HEADERS_.length
+      ).clearContent();
+      incrementCoverageMetric_('sheetWrites');
+    }
+    if (!sheet.isSheetHidden()) sheet.hideSheet();
+
+    invalidateCoverageSheetCache_(teacherScheduleCacheSheetName_(code));
+    markTeacherScheduleCacheDayFresh_(code);
+    coveragePerfMark_('teacher-schedule-' + code + '-rebuilt');
+    return prepared;
+  });
+}
+
+function readTeacherScheduleDayCached_(day) {
+  const code = String(day || '').trim().toUpperCase();
+  const sheetName = teacherScheduleCacheSheetName_(code);
+  if (!sheetName) return readSheetObjects_('Teacher Schedule');
+
+  if (!teacherScheduleCacheDayIsFresh_(code)) {
+    rebuildTeacherScheduleDayCache_(code);
+  }
+
+  // Cache sheets use the same canonical aliases as Teacher Schedule.
+  const name = sheetName;
+  if (Object.prototype.hasOwnProperty.call(COVERAGE_REQUEST_SHEET_CACHE_, name)) {
+    incrementCoverageMetric_('requestCacheHits');
+    return COVERAGE_REQUEST_SHEET_CACHE_[name];
+  }
+
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(name);
+  if (!sheet || sheet.getLastRow() < 2) return [];
+  incrementCoverageMetric_('sheetReads');
+  const values = sheet.getRange(
+    1, 1, sheet.getLastRow(), TEACHER_SCHEDULE_CACHE_HEADERS_.length
+  ).getValues();
+  const headers = values[0].map(value => String(value || '').trim());
+  const aliasMap = HEADER_ALIASES['Teacher Schedule'];
+  const columnByCanonical = {};
+  Object.keys(aliasMap).forEach(canonical => {
+    columnByCanonical[canonical] = findColumnByAliases_(headers, aliasMap[canonical]);
+  });
+
+  const rows = values.slice(1).map(row => {
+    const out = {};
+    Object.keys(columnByCanonical).forEach(canonical => {
+      const index = columnByCanonical[canonical];
+      out[canonical] = index === -1 ? '' : row[index];
+    });
+    return out;
+  }).filter(row => String(row.Staff_Name || '').trim());
+
+  COVERAGE_REQUEST_SHEET_CACHE_[name] = rows;
+  coveragePerfMark_('teacher-schedule-' + code + '-cache-read');
+  return rows;
+}
+
+function teacherScheduleRowsForDate_(date, day, config) {
+  const code = String(day || guessDayCodeFromDate_(normalizeDateKey_(date)) || '').trim().toUpperCase();
+  const rows = readTeacherScheduleDayCached_(code);
+  return filterTeacherScheduleForDate_(rows, date, config || getConfigMap_());
+}
+
+// Compatibility helper for older code paths that intentionally need the full
+// master schedule (validation/reporting). Hot paths should use the day helper.
 function readTeacherScheduleCached_() {
   return readSheetObjects_('Teacher Schedule');
 }
 
+function rebuildAllTeacherScheduleDayCaches_() {
+  const counts = {};
+  TEACHER_SCHEDULE_CACHE_DAYS_.forEach(day => {
+    counts[day] = rebuildTeacherScheduleDayCache_(day).length;
+  });
+  return counts;
+}
+
+function menuRebuildTeacherScheduleDayCaches() {
+  const counts = rebuildAllTeacherScheduleDayCaches_();
+  SpreadsheetApp.getActiveSpreadsheet().toast(
+    'Schedule caches rebuilt: ' +
+      TEACHER_SCHEDULE_CACHE_DAYS_.map(day => day + ' ' + counts[day]).join(' · '),
+    APP_TITLE,
+    8
+  );
+  return counts;
+}
+
 function getAllSchedulableStaff_(dayCode, date) {
   const config = getConfigMap_();
-  const rows = date
-    ? filterTeacherScheduleForDate_(readSheetObjects_('Teacher Schedule'), date, config)
+  const rows = dayCode
+    ? (date
+        ? teacherScheduleRowsForDate_(date, dayCode, config)
+        : readTeacherScheduleDayCached_(dayCode))
     : readSheetObjects_('Teacher Schedule');
   const map = {};
 
@@ -1161,7 +1430,6 @@ function poolPriorityAdjustment_(value) {
 
 function fieldTripCoveragePoolRowsForTrip_(trip, existingRows) {
   const config = getConfigMap_();
-  const teacherScheduleRows = readSheetObjects_('Teacher Schedule');
   const overrides = {};
   (existingRows || []).forEach(row => {
     if (String(row.Event_ID || '').trim() !== String(trip.eventId || '').trim()) return;
@@ -1175,7 +1443,7 @@ function fieldTripCoveragePoolRowsForTrip_(trip, existingRows) {
     const activeTrip = fieldTripForDate_(trip, date);
     if (!activeTrip) return;
     const day = guessDayCodeFromDate_(date);
-    const teacherSchedule = filterTeacherScheduleForDate_(teacherScheduleRows, date, config);
+    const teacherSchedule = teacherScheduleRowsForDate_(date, day, config);
     const configuredCoverageStaff = getCoverageStaffForDate_(date, day, config);
     const activeCoverageStaff = configuredCoverageStaff.filter(row => row.name && row.activeToday);
     const candidates = buildFieldTripCoverageCandidatesLive_(
@@ -2099,11 +2367,7 @@ function coverageNeedKey_(staffName, startMinutes, endMinutes, className) {
 // (notably whether the absence is an emergency).
 function buildCoverageLiveContext_(date, day) {
   const config = getConfigMap_();
-  const teacherSchedule = filterTeacherScheduleForDate_(
-    readSheetObjects_('Teacher Schedule'),
-    date,
-    config
-  );
+  const teacherSchedule = teacherScheduleRowsForDate_(date, day, config);
   const absences = getDailyAbsencesForDate_(date, day);
   const fieldTrips = getFieldTripsForDate_(date);
   const fieldTripPoolRows = fieldTrips.length ? fieldTripCoveragePoolRowsForDate_(date) : [];
@@ -2643,7 +2907,6 @@ function generateCoveragePreview(payload) {
   const day = payload.day || guessDayCodeFromDate_(date);
 
   primeCoverageRequestSnapshot_([
-    'Teacher Schedule',
     getCoverageStaffSheetName_(),
     'Substitute Availability',
     'Daily Absences',
@@ -2653,11 +2916,7 @@ function generateCoveragePreview(payload) {
   coveragePerfMark_('snapshot-loaded');
 
   const config = getConfigMap_();
-  const teacherSchedule = filterTeacherScheduleForDate_(
-    readSheetObjects_('Teacher Schedule'),
-    date,
-    config
-  );
+  const teacherSchedule = teacherScheduleRowsForDate_(date, day, config);
   const configuredCoverageStaff = getCoverageStaffForDate_(date, day, config);
   const activeCoverageStaff = configuredCoverageStaff.filter(row => row.name && row.activeToday);
   const absences = getDailyAbsencesForDate_(date, day);
