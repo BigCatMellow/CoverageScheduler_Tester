@@ -137,7 +137,12 @@ const HEADER_ALIASES = {
 const COVERAGE_PERSISTENT_CACHE_TTL_SECONDS_ = 60;
 const COVERAGE_PERSISTENT_CACHE_MAX_CHARS_ = 85000;
 const COVERAGE_PERSISTENT_CACHE_KEYS_ = {
-  'Config': 'coverage:v1:config'
+  'Config': 'coverage:v1:config',
+  'Coverage Staff': 'coverage:v1:coverage-staff',
+  'Substitutes': 'coverage:v1:substitutes',
+  'Substitute Availability': 'coverage:v1:sub-availability',
+  'Daily Absences': 'coverage:v1:daily-absences',
+  'Field Trips': 'coverage:v1:field-trips'
 };
 
 const FIELD_TRIP_COVERAGE_POOL_SHEET_ = 'Field Trip Coverage Pool';
