@@ -13,6 +13,7 @@ function onOpen() {
     .createMenu(APP_TITLE)
     .addItem('Set up workbook', 'setupCoverageScheduler')
     .addItem('Validate teacher schedule', 'menuValidateTeacherScheduleSource')
+    .addItem('Rebuild schedule day caches', 'menuRebuildTeacherScheduleDayCaches')
     .addSeparator()
     .addItem('Generate preview for selected day', 'generateCoveragePreviewFromPrompt')
     .addItem('Rebuild field trip coverage pool', 'menuRebuildFieldTripCoveragePool')
@@ -21,14 +22,20 @@ function onOpen() {
     .addToUi();
 }
 
-// Manual edits to source/config sheets must be visible immediately. Config
-// uses a short Script Cache entry; Teacher Schedule remains request-local only.
+// Manual edits to source/config sheets must be visible immediately. Teacher
+// Schedule hot paths use hidden per-day caches; edits to either schedule source
+// invalidate those caches so the next requested weekday rebuilds exactly once.
 function onEdit(e) {
   try {
     const sheet = e && e.range ? e.range.getSheet() : null;
     if (sheet) {
-      invalidateCoverageSheetCache_(sheet.getName());
-      if (['Teacher Schedule', 'Class Schedule', 'Field Trips', 'Config', 'Coverage Staff', 'Substitute Availability', 'Substitutes'].indexOf(sheet.getName()) !== -1) {
+      const sheetName = sheet.getName();
+      invalidateCoverageSheetCache_(sheetName);
+      if (['Teacher Schedule', 'Class Schedule', 'Copy of Class Schedule'].indexOf(sheetName) !== -1 &&
+          typeof markTeacherScheduleCacheDirty_ === 'function') {
+        markTeacherScheduleCacheDirty_();
+      }
+      if (['Teacher Schedule', 'Class Schedule', 'Copy of Class Schedule', 'Field Trips', 'Config', 'Coverage Staff', 'Substitute Availability', 'Substitutes'].indexOf(sheetName) !== -1) {
         markFieldTripCoveragePoolDirty_();
       }
     }
