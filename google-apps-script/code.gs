@@ -837,6 +837,11 @@ function getCoverageBootstrap_(payload) {
     allStaff: includeRoster && typeof getWebStaffRosterSummary_ === 'function'
       ? getWebStaffRosterSummary_()
       : null,
+    // Send the selected day's compact schedules once so absence editing does
+    // not need a separate Apps Script round trip for each teacher.
+    dayStaffSchedules: typeof getWebStaffRoster_ === 'function'
+      ? getWebStaffRoster_(dayCode)
+      : [],
     allCoverageStaff: getAllCoverageStaff_(today, dayCode),
     // Date navigation must stay cheap. Field-trip candidate materialization is
     // needed only by Generate/manual reassignment, not to display the day.
