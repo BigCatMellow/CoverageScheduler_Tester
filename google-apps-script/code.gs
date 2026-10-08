@@ -32,9 +32,13 @@ function onEdit(e) {
     if (sheet) {
       const sheetName = sheet.getName();
       invalidateCoverageSheetCache_(sheetName);
-      if (['Teacher Schedule', 'Class Schedule', 'Copy of Class Schedule'].indexOf(sheetName) !== -1) {
-        if (typeof markTeacherScheduleCacheDirty_ === 'function') markTeacherScheduleCacheDirty_();
-        if (typeof markClassScheduleDayCachesDirty_ === 'function') markClassScheduleDayCachesDirty_();
+      if (['Teacher Schedule', 'Class Schedule', 'Copy of Class Schedule', 'Config'].indexOf(sheetName) !== -1 &&
+          typeof markTeacherScheduleCacheDirty_ === 'function') {
+        markTeacherScheduleCacheDirty_();
+      }
+      if (['Teacher Schedule', 'Class Schedule', 'Copy of Class Schedule'].indexOf(sheetName) !== -1 &&
+          typeof markClassScheduleDayCachesDirty_ === 'function') {
+        markClassScheduleDayCachesDirty_();
       }
       if (['Teacher Schedule', 'Class Schedule', 'Copy of Class Schedule', 'Field Trips', 'Config', 'Coverage Staff', 'Substitute Availability', 'Substitutes'].indexOf(sheetName) !== -1) {
         markFieldTripCoveragePoolDirty_();
