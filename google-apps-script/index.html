@@ -332,6 +332,13 @@ async function bootstrap(date){
     S.scheduleCache={};
     S.schedulePromises={};
     if(Array.isArray(data.allStaff))S.allStaff=data.allStaff;
+    (data.dayStaffSchedules||[]).forEach(record=>{
+      const full=Object.assign({scheduleLoaded:true},record||{});
+      if(full.scheduleName)S.scheduleCache[scheduleKey(full.scheduleName)]=full;
+      if(full.name)S.scheduleCache[scheduleKey(full.name)]=full;
+      const roster=rosterMatch(full.name||full.scheduleName||'');
+      if(roster)Object.assign(roster,full);
+    });
     S.coverage=data.allCoverageStaff||[];
     S.fieldTripCoverage=[];
     S.manualWorkspace=null;
