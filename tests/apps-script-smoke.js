@@ -52,6 +52,16 @@ const clientApi = numericConst(
 );
 assert.strictEqual(clientApi, serverApi, 'browser/server API versions must match');
 
+const schedulerModule = numericConst(
+  sources['scheduler.gs'],
+  /const\s+COVERAGE_SCHEDULER_MODULE_VERSION\s*=\s*(\d+)\s*;/,
+  'COVERAGE_SCHEDULER_MODULE_VERSION'
+);
+assert(
+  sources['code.gs'].includes('COVERAGE_SCHEDULER_MODULE_VERSION !== ' + schedulerModule),
+  'bootstrap must reject a stale scheduler module'
+);
+
 const handoutModule = numericConst(
   sources['handout.gs'],
   /const\s+FIELD_TRIP_HANDOUT_MODULE_VERSION\s*=\s*(\d+)\s*;/,
