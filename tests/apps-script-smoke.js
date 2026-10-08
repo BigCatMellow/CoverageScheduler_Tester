@@ -214,6 +214,15 @@ assert(
   sources['handout.gs'].includes('Field trip form compaction failed:'),
   'handout generation must verify unused form removal'
 );
+const trailingFormRemoval = functionBody(sources['handout.gs'], 'removeTrailingUnusedFieldTripForm_');
+assert(
+  trailingFormRemoval.includes("body.appendParagraph('')"),
+  'unused field-trip form removal must preserve a required terminal document paragraph'
+);
+assert(
+  trailingFormRemoval.includes('terminalParagraphIndex - 1'),
+  'unused field-trip form removal must never delete the terminal sentinel paragraph'
+);
 
 assert(
   index.includes('S.manualWorkspace=result.manualWorkspace||null'),
