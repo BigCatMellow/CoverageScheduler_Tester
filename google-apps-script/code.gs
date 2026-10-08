@@ -523,7 +523,7 @@ function makeWebSafe_(value) {
 function webGetBootstrap(payload) {
   return runCoverageWebRequest_('webGetBootstrap', () => {
     if (typeof FIELD_TRIP_HANDOUT_MODULE_VERSION === 'undefined' ||
-        FIELD_TRIP_HANDOUT_MODULE_VERSION !== 4) {
+        FIELD_TRIP_HANDOUT_MODULE_VERSION !== 5) {
       throw new Error(
         'Coverage Scheduler deployment is out of sync: handout.gs is not the current field-trip form module. Deploy every file in google-apps-script together as one new version.'
       );
