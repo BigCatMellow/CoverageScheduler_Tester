@@ -2902,6 +2902,7 @@ function fillDeferredFieldTripNeeds_(
 }
 
 function generateCoveragePreview(payload) {
+  const generateStartedAt = Date.now();
   payload = payload || {};
   const date = payload.date || Utilities.formatDate(new Date(), coverageTimeZone_(), 'yyyy-MM-dd');
   const day = payload.day || guessDayCodeFromDate_(date);
@@ -3194,6 +3195,7 @@ function generateCoveragePreview(payload) {
   coveragePerfMark_('schedule-built');
   writePreview_(planRows);
   coveragePerfMark_('preview-written');
+  summary.elapsedMs = Date.now() - generateStartedAt;
 
   return {
     date: date,
