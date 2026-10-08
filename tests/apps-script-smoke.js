@@ -83,6 +83,10 @@ assert(
   !bootstrap.includes("'_Preview'"),
   'web bootstrap must not read the shared _Preview scratch sheet'
 );
+assert(
+  bootstrap.includes('dayStaffSchedules'),
+  'web bootstrap must batch selected-day staff schedules for local absence editing'
+);
 
 const webGenerate = functionBody(sources['code.gs'], 'webGenerateCoverage');
 assert(
@@ -214,6 +218,10 @@ assert(
 assert(
   index.includes('S.manualWorkspace=result.manualWorkspace||null'),
   'browser must retain the generated manual-choice workspace'
+);
+assert(
+  index.includes('(data.dayStaffSchedules||[]).forEach'),
+  'browser must hydrate its local staff schedule cache from bootstrap'
 );
 const saveBlockStart = index.indexOf('function saveBlock()');
 const saveBlockEnd = index.indexOf('\nasync function generate()', saveBlockStart);
