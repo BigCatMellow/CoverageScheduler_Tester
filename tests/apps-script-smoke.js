@@ -3,6 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const assert = require('assert');
+const vm = require('vm');
 
 const root = path.resolve(__dirname, '..');
 const gasDir = path.join(root, 'google-apps-script');
@@ -17,7 +18,17 @@ function read(name) {
 const sources = Object.fromEntries(serverFiles.map(name => [name, read(name)]));
 const combined = serverFiles.map(name => '// FILE: ' + name + '\n' + sources[name]).join('\n');
 
-// Apps Script server files share one global namespace, so parse them together.
+// Parse each Apps Script file as a true script first. This catches syntax that
+// Function() incorrectly permits, including a top-level return from a bad
+// extraction boundary.
+serverFiles.forEach(name => {
+  assert.doesNotThrow(
+    () => new vm.Script(sources[name], { filename: name }),
+    name + ' must parse as an Apps Script file'
+  );
+});
+
+// Apps Script server files share one global namespace, so also parse them together.
 new Function(combined);
 
 const uiPartialFiles = [

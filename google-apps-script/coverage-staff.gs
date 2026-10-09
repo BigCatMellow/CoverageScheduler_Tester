@@ -1,7 +1,8 @@
 // Coverage-staff roster, date overrides, eligibility normalization, and matching.
 // Structural extraction from scheduler.gs; behavior intentionally unchanged.
 
-const config = getConfigMap_();
+function getAllSchedulableStaff_(dayCode, date) {
+  const config = getConfigMap_();
   const rows = dayCode
     ? (date
         ? teacherScheduleRowsForDate_(date, dayCode, config)

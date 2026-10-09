@@ -264,8 +264,6 @@ function menuRebuildTeacherScheduleDayCaches() {
   return counts;
 }
 
-function getAllSchedulableStaff_(dayCode, date) {
-
 function normalizeScheduleTerm_(value) {
   const raw = String(value || '').trim();
   if (!raw) return '';
