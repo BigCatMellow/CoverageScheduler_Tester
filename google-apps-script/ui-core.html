@@ -1,0 +1,226 @@
+// Browser state, RPC helpers, schedule helpers, bootstrap, and base rendering.
+
+const REQUIRED_WEB_API_VERSION=13;
+const S={date:'',day:'',allStaff:[],coverage:[],fieldTripCoverage:[],absences:[],fieldTrips:[],plan:[],view:'timeline',generating:false,editingAbsence:null,editingAbsenceIndex:null,editingCoverage:null,editingBlock:null,blockSchedules:{},blockChoiceResult:null,manualWorkspace:null,pendingDelete:null,scheduleCache:{},schedulePromises:{}};
+const $=id=>document.getElementById(id);
+const DAY_NAMES={M:'Monday',T:'Tuesday',W:'Wednesday',R:'Thursday',F:'Friday'};
+const esc=value=>String(value==null?'':value).replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+
+function gas(method,payload){
+  return new Promise((resolve,reject)=>{
+    const runner=google.script.run
+      .withSuccessHandler(resolve)
+      .withFailureHandler(err=>reject(new Error(err&&err.message?err.message:String(err))));
+    const fn=runner[method];
+    if(typeof fn!=='function'){
+      reject(new Error(
+        'Coverage Scheduler deployment is out of sync: the browser is calling "'+method+
+        '" but the deployed server does not provide it. Deploy every file in google-apps-script together as one new version.'
+      ));
+      return;
+    }
+    runner[method](payload);
+  });
+}
+function dayFromDate(date){const d=new Date(date+'T12:00:00');return ['U','M','T','W','R','F','S'][d.getDay()]||'';}
+function showModal(id){$(id).classList.remove('hidden')}function closeModal(id){$(id).classList.add('hidden')}
+function flash(message,type='ok'){const n=$('notif');n.className='notif '+type;n.innerHTML=(type==='ok'?'✓ ':type==='warn'?'⚠ ':'✗ ')+esc(message)+'<button onclick="this.parentElement.classList.add(\'hidden\')">×</button>';n.classList.remove('hidden');clearTimeout(flash.t);flash.t=setTimeout(()=>n.classList.add('hidden'),5200)}
+function fail(err){console.error(err);flash(err.message||String(err),'err')}
+function timeDisplay(v){if(!v)return'';const m=String(v).match(/^(\d{1,2}):(\d{2})(?:\s*(AM|PM))?$/i);if(!m)return String(v);let h=+m[1],min=m[2],p=(m[3]||'').toUpperCase();if(!p){p=h>=12?'PM':'AM';h=h%12||12}return h+':'+min+' '+p}
+function timeInput(v){if(!v)return'';const m=String(v).match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);if(!m)return String(v).slice(0,5);let h=+m[1];if(m[3].toUpperCase()==='PM'&&h<12)h+=12;if(m[3].toUpperCase()==='AM'&&h===12)h=0;return String(h).padStart(2,'0')+':'+m[2]}
+function clientNameKey(value){return String(value||'').trim().toLowerCase().replace(/[^a-z0-9]/g,'')}
+function rosterMatch(staffName){const key=clientNameKey(staffName);return S.allStaff.find(x=>x.scheduleName===staffName||x.name===staffName||clientNameKey(x.scheduleName)===key||clientNameKey(x.name)===key)||null}
+function scheduleKey(name){return String(name||'').trim().toLowerCase()}
+function scheduleRecord(staffName){
+  return S.scheduleCache[scheduleKey(staffName)]||rosterMatch(staffName)||null;
+}
+async function ensureStaffScheduleLoaded(staffName){
+  const name=String(staffName||'').trim();
+  if(!name)return null;
+  const key=scheduleKey(name);
+  const cached=S.scheduleCache[key];
+  if(cached&&cached.scheduleLoaded)return cached;
+  if(S.schedulePromises[key])return S.schedulePromises[key];
+
+  const requestedDate=S.date;
+  S.schedulePromises[key]=gas('webGetStaffSchedule',{staffName:name,date:S.date,day:S.day})
+    .then(data=>{
+      if(requestedDate!==S.date)return null;
+      const record=Object.assign({name:name,displayName:name,scheduleName:name,role:'Teacher',subject:'',blocks:[],scheduleMatched:false,scheduleLoaded:true},data||{});
+      S.scheduleCache[key]=record;
+      const roster=rosterMatch(name);
+      if(roster)Object.assign(roster,record);
+      return record;
+    })
+    .finally(()=>{delete S.schedulePromises[key]});
+  return S.schedulePromises[key];
+}
+function coverageChoices(){const seen={};return S.coverage.concat(S.fieldTripCoverage||[]).filter(c=>{if(!c||!c.name||seen[c.name])return false;seen[c.name]=true;return true})}
+function coverageMatch(name){return coverageChoices().find(x=>x.name===name)||null}
+
+function uniqueSortedTimes(values){return Array.from(new Set((values||[]).filter(Boolean).map(timeDisplay))).sort((a,b)=>mins(a)-mins(b))}
+function fillTimeSelect(select,values,includeBlank){
+  const options=includeBlank?[''].concat(uniqueSortedTimes(values)):uniqueSortedTimes(values);
+  select.innerHTML=options.map(value=>'<option value="'+esc(value)+'">'+esc(value||'No limit')+'</option>').join('');
+}
+function timeOptionsForStaff(staffName){
+  const staff=scheduleRecord(staffName)||{};
+  const blocks=(staff.blocks||[]).filter(block=>block.start&&block.end).slice().sort((a,b)=>mins(a.start)-mins(b.start));
+  const starts=uniqueSortedTimes(blocks.map(block=>block.start));
+  const ends=uniqueSortedTimes(blocks.map(block=>block.end));
+  const now=new Date(),nowMinutes=now.getHours()*60+now.getMinutes();
+  const currentBlock=blocks.find(block=>mins(block.start)<=nowMinutes&&mins(block.end)>nowMinutes);
+  const nextBlock=blocks.find(block=>mins(block.start)>=nowMinutes);
+  return {
+    blocks,
+    starts,
+    ends,
+    defaultStart:starts[0]||'',
+    defaultEnd:ends[ends.length-1]||'',
+    emergencyStart:(currentBlock&&timeDisplay(currentBlock.start))||(nextBlock&&timeDisplay(nextBlock.start))||starts[0]||''
+  };
+}
+function coverageTimeOptions(staff){
+  const times=[];
+  S.allStaff.forEach(person=>(person.blocks||[]).forEach(block=>{if(block.start)times.push(block.start);if(block.end)times.push(block.end)}));
+  ['7:00 AM','7:30 AM','8:00 AM','8:30 AM','9:00 AM','9:30 AM','10:00 AM','10:30 AM','11:00 AM','11:30 AM','12:00 PM','12:30 PM','1:00 PM','1:30 PM','2:00 PM','2:30 PM','3:00 PM','3:30 PM','4:00 PM',
+   staff&&staff.selectedStart,staff&&staff.selectedEnd,staff&&staff.defaultStart,staff&&staff.defaultEnd].forEach(value=>{if(value)times.push(value)});
+  return uniqueSortedTimes(times);
+}
+const MINI_TL_TYPE_CLASS={Break:'free',Planning:'free',Duty:'busy',Homeroom:'busy',Class:'busy'};
+function miniBlockClass(block){
+  if(block.breakMovedHere)return'break-moved';
+  if(block.cancelled)return'released';
+  return MINI_TL_TYPE_CLASS[block.type]||'busy';
+}
+function miniBlockLabel(block){
+  // The server already writes a fully descriptive label for a moved break
+  // ("Break (moved from 1:00 PM)" / "Break — moved to 2:00 PM") — the
+  // generic "cancelled (field trip)" suffix would just be redundant there.
+  if(block.breakMovedHere||block.breakMovedAway)return block.label;
+  if(block.cancelled)return block.label+' — cancelled (field trip)';
+  return block.label;
+}
+
+// Shows one person's day inline in the reassignment modal: a compact,
+// unlabeled strip for the at-a-glance shape of their day (where the gaps
+// are, where the block being reassigned falls), plus a vertical list below
+// it that actually carries the readable detail. A single horizontal strip
+// can't do both — a teacher with a full day of 30-45 minute periods has too
+// many segments for any of them to hold legible text at modal width, no
+// matter the font size, so the strip stays unlabeled (color + a hover title
+// only) and the list is what you actually read.
+function renderCandidateMiniSchedule(name){
+  const el=$('blockCoverageSchedule');
+  if(!name){el.innerHTML='';return}
+
+  const base=(S.blockSchedules&&S.blockSchedules[name])||[];
+  if(!base.length){el.innerHTML='<div class="mini-tl-empty">No schedule on file for '+esc(name)+' today.</div>';return}
+
+  const covering=S.plan.filter(r=>r.Assigned_Coverage===name&&r.Status==='Assigned')
+    .map(r=>({start:r.Start,end:r.End,label:'Covering '+(r.Absent_Staff||'')+' — '+(r.Class||r.Subject||''),type:'Covering',cancelled:false,covering:true}));
+
+  // What they're actually doing right now (covering something) takes
+  // precedence over what their base schedule says — otherwise a break spent
+  // covering someone else still shows as plain "Break", looking free when
+  // it isn't.
+  const overlapsCovering=b=>covering.some(c=>mins(c.start)<mins(b.end)&&mins(b.start)<mins(c.end));
+  const visibleBase=base.filter(b=>!overlapsCovering(b));
+
+  const blocks=visibleBase.concat(covering).sort((a,b)=>mins(a.start)-mins(b.start));
+  const r=S.editingBlock!=null?S.plan[S.editingBlock]:null;
+  const isThisBlock=b=>r&&mins(b.start)===mins(r.Start)&&mins(b.end)===mins(r.End);
+
+  const ticks=[480,600,720,840].map(m=>
+    '<span class="mini-tl-tick" style="left:'+((m-TL_START)/TL_SPAN*100)+'%">'+(m===720?'12p':m<720?(m/60)+'a':((m/60)-12)+'p')+'</span>'
+  ).join('');
+  const hrs=[480,600,720,840].map(m=>'<span class="mini-tl-hr" style="left:'+((m-TL_START)/TL_SPAN*100)+'%"></span>').join('');
+  const stripHtml=blocks.map(b=>{
+    const left=pct(b.start),width=Math.max(1,pct(b.end)-left);
+    const cls=b.covering?'covering':miniBlockClass(b);
+    return'<div class="mini-tl-blk '+cls+'" style="left:'+left+'%;width:'+width+'%" title="'+esc(timeDisplay(b.start)+'–'+timeDisplay(b.end)+' · '+miniBlockLabel(b))+'"></div>';
+  }).join('');
+  const bandHtml=r?'<div class="mini-tl-band" style="left:'+pct(r.Start)+'%;width:'+Math.max(1,pct(r.End)-pct(r.Start))+'%" title="The block being reassigned"></div>':'';
+
+  const listHtml=blocks.map(b=>{
+    const cls=b.covering?'covering':miniBlockClass(b);
+    return'<div class="mini-tl-item'+(isThisBlock(b)?' this-block':'')+'"><i class="mini-tl-swatch '+cls+'"></i>'+
+      '<span class="mini-tl-item-time">'+esc(timeDisplay(b.start))+'–'+esc(timeDisplay(b.end))+'</span>'+
+      '<span class="mini-tl-item-label">'+esc(miniBlockLabel(b))+'</span>'+
+      (isThisBlock(b)?'<span class="mini-tl-item-flag">This block</span>':'')+'</div>';
+  }).join('');
+
+  el.innerHTML='<div class="mini-tl-name">'+esc(name)+'\u2019s schedule today</div>'+
+    '<div class="mini-tl-axis">'+ticks+'</div>'+
+    '<div class="mini-tl-track">'+hrs+stripHtml+bandHtml+'</div>'+
+    '<div class="mini-tl-list">'+listHtml+'</div>'+
+    '<div class="mini-tl-legend">'+
+      '<span><i class="mini-tl-swatch busy"></i>Teaching/duty</span>'+
+      '<span><i class="mini-tl-swatch free"></i>Break/planning</span>'+
+      '<span><i class="mini-tl-swatch released"></i>Freed by a trip</span>'+
+      '<span><i class="mini-tl-swatch covering"></i>Already covering today</span>'+
+      '<span><i class="mini-tl-swatch break-moved"></i>Break moved here</span>'+
+    '</div>';
+}
+
+function populateAbsenceTimeOptions(preserve){
+  const staffName=$('absenceStaff').value;
+  const options=timeOptionsForStaff(staffName);
+  const startValue=preserve&&$('absenceStart').value?$('absenceStart').value:options.defaultStart;
+  const endValue=preserve&&$('absenceEnd').value?$('absenceEnd').value:options.defaultEnd;
+  fillTimeSelect($('absenceStart'),options.starts,false);
+  fillTimeSelect($('absenceEnd'),options.ends,false);
+  if(startValue&&[...$('absenceStart').options].some(o=>o.value===timeDisplay(startValue)))$('absenceStart').value=timeDisplay(startValue);
+  if(endValue&&[...$('absenceEnd').options].some(o=>o.value===timeDisplay(endValue)))$('absenceEnd').value=timeDisplay(endValue);
+  return options;
+}
+
+async function bootstrap(date){
+  try{
+    setLoading(true);
+    const d=date||S.date||'';
+    const day=d?dayFromDate(d):'';
+    const data=await gas('webGetBootstrap',{date:d,day,includeRoster:!S.allStaff.length});
+    const serverVersion=Number(data&&data.webApiVersion||0);
+    if(serverVersion!==REQUIRED_WEB_API_VERSION){
+      throw new Error(
+        'Coverage Scheduler deployment is out of sync. This UI requires server API '+
+        REQUIRED_WEB_API_VERSION+' but the deployed server reports '+
+        (serverVersion||'a legacy version')+
+        '. Deploy every file in google-apps-script together as one new version.'
+      );
+    }
+    S.date=data.today;
+    S.day=data.day;
+    S.scheduleCache={};
+    S.schedulePromises={};
+    if(Array.isArray(data.allStaff))S.allStaff=data.allStaff;
+    (data.dayStaffSchedules||[]).forEach(record=>{
+      const full=Object.assign({scheduleLoaded:true},record||{});
+      if(full.scheduleName)S.scheduleCache[scheduleKey(full.scheduleName)]=full;
+      if(full.name)S.scheduleCache[scheduleKey(full.name)]=full;
+      const roster=rosterMatch(full.name||full.scheduleName||'');
+      if(roster)Object.assign(roster,full);
+    });
+    S.coverage=data.allCoverageStaff||[];
+    S.fieldTripCoverage=[];
+    S.manualWorkspace=null;
+    S.blockChoiceResult=null;
+    S.absences=normalizeAbsences(data.currentAbsences||[]);
+    S.fieldTrips=data.currentFieldTrips||[];
+    S.plan=(data.currentPreview&&data.currentPreview.rows)||[];
+    $('dateInput').value=S.date;
+    renderAll();
+  }catch(e){
+    renderFatal(e);
+    fail(e);
+  }finally{
+    setLoading(false);
+  }
+}
+function normalizeAbsences(rows){return rows.map(a=>({staffName:a.staffName,absenceType:a.emergency?'Emergency':(a.absenceType||'Full Day'),allDay:a.emergency||String(a.absenceType||'').toLowerCase()==='full day',emergency:!!a.emergency,startOverride:a.startOverride||'',endOverride:a.endOverride||'',preferredCoverage:a.preferredCoverage||'',notes:a.notes||''}))}
+function setLoading(on){S.generating=on;$('generateBtn').disabled=on;$('generateBtn').textContent=on?'Loading…':(S.plan.length?'Re-generate':'Generate Plan')}
+function renderFatal(err){$('planBody').innerHTML='<div class="error-box"><h3>Coverage Scheduler could not load</h3><p>'+esc(err.message||err)+'</p></div>'}
+function renderAll(){renderDay();renderAbsences();renderCoverage();renderPlan();renderStats();populatePreferredCoverage()}
+function renderDay(){$('dayTag').textContent=S.day?(S.day+' · '+(DAY_NAMES[S.day]||'')):'—'}
+function renderStats(){const assigned=S.plan.filter(r=>r.Status==='Assigned').length,unfilled=S.plan.filter(r=>r.Status!=='Assigned').length;$('absentCount').textContent=S.absences.length;$('absPanelCount').textContent=S.absences.length;$('assignedCount').textContent=assigned;$('unfilledCount').textContent=unfilled;$('blocksCount').textContent=S.plan.length;['assignedStat','blocksStat'].forEach(id=>$(id).classList.toggle('hidden',!S.plan.length));$('unfilledStat').classList.toggle('hidden',!S.plan.length||!unfilled);$('savePlanBtn').classList.toggle('hidden',!S.plan.length);$('handoutBtn').classList.toggle('hidden',!assigned);$('viewTabs').classList.toggle('hidden',!S.plan.length);$('planCounts').classList.toggle('hidden',!S.plan.length);$('planAssigned').textContent=assigned+' assigned';$('planUnfilled').textContent=unfilled?unfilled+' unfilled':'';$('generateBtn').disabled=S.generating||(!S.absences.length&&!S.fieldTrips.length);$('generateBtn').textContent=S.generating?'Generating…':(S.plan.length?'Re-generate':'Generate Plan')}
