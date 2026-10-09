@@ -72,7 +72,7 @@ function setupCoverageScheduler() {
 }
 
 function includeCoveragePartial_(filename) {
-  return HtmlService.createHtmlOutputFromFile(String(filename || '')).getContent();
+  return HtmlService.createTemplateFromFile(String(filename || '')).getRawContent();
 }
 
 function doGet() {
