@@ -15,7 +15,15 @@ For a complete first-time-user walkthrough, start with [`docs/wiki/Home.md`](../
 - `index.html` — full-page Coverage Scheduler interface
 - `teacher-schedule-adapter.gs` — preserves and validates the existing Teacher Schedule source
 - `setup.gs` — managed workbook sheets, validation, and defaults
-- `scheduler.gs` — scheduling engine, normalization, preview, and saved output
+- `scheduler.gs` — top-level generation orchestration
+- `coverage-foundation.gs` — shared schemas, cache plumbing, sheet I/O, config, and time/value utilities
+- `field-trips.gs` — field-trip persistence, normalization, date behavior, and participant absences
+- `schedule-cache.gs` — prepared weekday Teacher Schedule cache and schedule normalization
+- `coverage-staff.gs` — Coverage Staff roster, date overrides, and eligibility normalization
+- `field-trip-pool.gs` — field-trip candidate pool, freshness, released-time logic, and break relocation
+- `manual-coverage.gs` — manual reassignment workspace and live assignment validation
+- `coverage-assignment.gs` — coverage needs, scoring, automatic assignment, and plan-row construction
+- `coverage-save.gs` — durable plan save/reload plus legacy preview helpers
 - `sidebar.html` — optional spreadsheet sidebar markup
 - `sidebarcss.html` — optional sidebar styles
 - `sidebarjs.html` — optional sidebar browser logic
@@ -51,7 +59,15 @@ If `Staff List` does not exist or is empty, setup creates it and seeds unique te
    - `field-trip-ui.gs`
    - `teacher-schedule-adapter.gs`
    - `setup.gs`
+   - `coverage-foundation.gs`
+   - `field-trips.gs`
+   - `schedule-cache.gs`
+   - `coverage-staff.gs`
+   - `field-trip-pool.gs`
+   - `manual-coverage.gs`
+   - `coverage-assignment.gs`
    - `scheduler.gs`
+   - `coverage-save.gs`
    - `index.html`
    - `sidebar.html`
    - `sidebarcss.html`
@@ -71,7 +87,7 @@ You do **not** need to manually edit `Coverage Staff` for normal use. Open the w
 4. Deploy and authorize the requested Google Sheets/Docs/Drive permissions.
 5. Open the generated `/exec` URL.
 
-When updating an existing installation, keep the browser and server files in sync. The current manual-placement and field-trip workflow depends on the current versions of `code.gs`, `scheduler.gs`, `index.html`, and `field-trip-ui.gs` being deployed together. The web app now checks a server API version during startup and refuses to run a mixed deployment.
+When updating an existing installation, keep the browser and server files in sync. The scheduling engine is intentionally split across focused sibling `.gs` modules that share one Apps Script global namespace, so deploy the entire `google-apps-script/` set together rather than copying individual server files. The web app now checks a server API version during startup and refuses to run a mixed deployment.
 
 The web UI supports the normal workflow: choose a date, add/edit absences, create/edit/remove coverage staff, toggle daily coverage availability, generate the plan, inspect Timeline/Table/By Sub views, and manually reassign blocks. **Save Plan** persists the exact reviewed plan to `Coverage Output`. **Create Handout** now persists that same reviewed plan first and only then creates the handout, so a generated handout always has reloadable saved coverage behind it. Returning to that date reloads the durable saved rows from `Coverage Output`; unsaved generated plans remain browser-only and are intentionally not restored from `_Preview`.
 
@@ -87,7 +103,7 @@ During generation, trip-grade classes are treated as cancelled while those stude
 
 ## Handouts
 
-The web app treats **Save Plan** and **Create Handout** as independent actions. **Save Plan** writes the reviewed plan to `Coverage Output`; **Create Handout** builds the Google Doc from the reviewed in-memory plan without saving it first. Manual block reassignments made after generation are therefore preserved in either action.
+**Save Plan** writes the reviewed plan to `Coverage Output`. **Create Handout** saves that same reviewed in-memory plan first and then builds the Google Doc, so every generated handout has a durable reloadable schedule behind it. Manual block reassignments made after generation are preserved in either action.
 
 For ordinary absence rows, handouts keep the generated landscape format. Field-trip handouts are now built directly from the approved form specification in code instead of copying and trimming a Google Doc template. Each form is for one staff member who is on the trip and can hold up to six coverage assignments; two forms are placed on each page. The generated form preserves the reference document's Letter portrait page, 0.5-inch margins, Cambria typography, metadata fields, and five-column assignment table. The `WITH` cell is populated only when Teacher Schedule resolves exactly one other regular teacher for the same class/block; ambiguous or missing matches remain blank. `Config!Field_Trip_Form_Template_ID` is retained only as a legacy/reference value and is not opened during handout generation. See [`../docs/FIELD-TRIP-HANDOUT.md`](../docs/FIELD-TRIP-HANDOUT.md) for the construction specification.
 
