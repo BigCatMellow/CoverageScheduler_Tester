@@ -118,8 +118,9 @@ function functionBodyAny(name) {
 
 const includePartial = functionBody(sources['code.gs'], 'includeCoveragePartial_');
 assert(
-  includePartial.includes('HtmlService.createHtmlOutputFromFile'),
-  'web UI partials must be composed through the Apps Script template include helper'
+  includePartial.includes('HtmlService.createTemplateFromFile') &&
+  includePartial.includes('.getRawContent()'),
+  'web UI partials must be included as raw template source so JavaScript/CSS is not HTML-validated before composition'
 );
 assert(
   indexTemplate.includes("includeCoveragePartial_('styles')") &&
