@@ -35,11 +35,32 @@ const combined = serverFiles.map(name => '// FILE: ' + name + '\n' + sources[nam
 // Apps Script server files share one global namespace, so parse them together.
 new Function(combined);
 
-const index = read('index.html');
+const uiPartialFiles = [
+  'styles.html',
+  'ui-core.html',
+  'ui-plan.html',
+  'ui-people.html',
+  'ui-manual.html',
+  'ui-actions.html'
+];
+
+function expandIndexTemplateForTest(template) {
+  return template.replace(
+    /<\?!=\s*includeCoveragePartial_\('([^']+)'\);\s*\?>/g,
+    (_, name) => read(name + '.html')
+  );
+}
+
+const indexTemplate = read('index.html');
+const index = expandIndexTemplateForTest(indexTemplate);
+assert(
+  !index.includes('<?!= includeCoveragePartial_'),
+  'all index partials must resolve in smoke tests'
+);
 const scriptBlocks = [...index.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(match => match[1]);
-assert(scriptBlocks.length > 0, 'index.html must contain a browser script');
+assert(scriptBlocks.length > 0, 'expanded index.html must contain a browser script');
 scriptBlocks.forEach((script, i) => {
-  assert.doesNotThrow(() => new Function(script), 'index.html script block ' + (i + 1) + ' must parse');
+  assert.doesNotThrow(() => new Function(script), 'expanded index.html script block ' + (i + 1) + ' must parse');
 });
 
 function numericConst(source, pattern, label) {
@@ -98,6 +119,21 @@ function sourceForFunction(name) {
 function functionBodyAny(name) {
   return functionBody(sourceForFunction(name), name);
 }
+
+const includePartial = functionBody(sources['code.gs'], 'includeCoveragePartial_');
+assert(
+  includePartial.includes('HtmlService.createHtmlOutputFromFile'),
+  'web UI partials must be composed through the Apps Script template include helper'
+);
+assert(
+  indexTemplate.includes("includeCoveragePartial_('styles')") &&
+  indexTemplate.includes("includeCoveragePartial_('ui-core')") &&
+  indexTemplate.includes("includeCoveragePartial_('ui-plan')") &&
+  indexTemplate.includes("includeCoveragePartial_('ui-people')") &&
+  indexTemplate.includes("includeCoveragePartial_('ui-manual')") &&
+  indexTemplate.includes("includeCoveragePartial_('ui-actions')"),
+  'index.html must remain a thin shell that composes all UI partials'
+);
 
 const bootstrap = functionBody(sources['code.gs'], 'getCoverageBootstrap_');
 assert(
