@@ -6,16 +6,9 @@ const assert = require('assert');
 
 const root = path.resolve(__dirname, '..');
 const gasDir = path.join(root, 'google-apps-script');
-const serverFiles = [
-  'code.gs',
-  'setup.gs',
-  'scheduler.gs',
-  'teacher-schedule-adapter.gs',
-  'class-schedule.gs',
-  'web-ui-data.gs',
-  'field-trip-ui.gs',
-  'handout.gs'
-];
+const serverFiles = fs.readdirSync(gasDir)
+  .filter(name => name.endsWith('.gs'))
+  .sort();
 
 function read(name) {
   return fs.readFileSync(path.join(gasDir, name), 'utf8');
@@ -27,11 +20,32 @@ const combined = serverFiles.map(name => '// FILE: ' + name + '\n' + sources[nam
 // Apps Script server files share one global namespace, so parse them together.
 new Function(combined);
 
-const index = read('index.html');
+const uiPartialFiles = [
+  'styles.html',
+  'ui-core.html',
+  'ui-plan.html',
+  'ui-people.html',
+  'ui-manual.html',
+  'ui-actions.html'
+];
+
+function expandIndexTemplateForTest(template) {
+  return template.replace(
+    /<\?!=\s*includeCoveragePartial_\('([^']+)'\);\s*\?>/g,
+    (_, name) => read(name + '.html')
+  );
+}
+
+const indexTemplate = read('index.html');
+const index = expandIndexTemplateForTest(indexTemplate);
+assert(
+  !index.includes('<?!= includeCoveragePartial_'),
+  'all index partials must resolve in smoke tests'
+);
 const scriptBlocks = [...index.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(match => match[1]);
-assert(scriptBlocks.length > 0, 'index.html must contain a browser script');
+assert(scriptBlocks.length > 0, 'expanded index.html must contain a browser script');
 scriptBlocks.forEach((script, i) => {
-  assert.doesNotThrow(() => new Function(script), 'index.html script block ' + (i + 1) + ' must parse');
+  assert.doesNotThrow(() => new Function(script), 'expanded index.html script block ' + (i + 1) + ' must parse');
 });
 
 function numericConst(source, pattern, label) {
@@ -78,6 +92,33 @@ function functionBody(source, name) {
   const next = source.indexOf('\nfunction ', start + 10);
   return source.slice(start, next < 0 ? source.length : next);
 }
+
+function sourceForFunction(name) {
+  const entry = Object.entries(sources).find(([, source]) =>
+    source.includes('function ' + name + '(')
+  );
+  assert(entry, 'Missing server function ' + name);
+  return entry[1];
+}
+
+function functionBodyAny(name) {
+  return functionBody(sourceForFunction(name), name);
+}
+
+const includePartial = functionBody(sources['code.gs'], 'includeCoveragePartial_');
+assert(
+  includePartial.includes('HtmlService.createHtmlOutputFromFile'),
+  'web UI partials must be composed through the Apps Script template include helper'
+);
+assert(
+  indexTemplate.includes("includeCoveragePartial_('styles')") &&
+  indexTemplate.includes("includeCoveragePartial_('ui-core')") &&
+  indexTemplate.includes("includeCoveragePartial_('ui-plan')") &&
+  indexTemplate.includes("includeCoveragePartial_('ui-people')") &&
+  indexTemplate.includes("includeCoveragePartial_('ui-manual')") &&
+  indexTemplate.includes("includeCoveragePartial_('ui-actions')"),
+  'index.html must remain a thin shell that composes all UI partials'
+);
 
 const bootstrap = functionBody(sources['code.gs'], 'getCoverageBootstrap_');
 assert(
@@ -138,7 +179,7 @@ assert(
   'latest-preview handout creation must revalidate before printing'
 );
 
-const savedCoverageReader = functionBody(sources['scheduler.gs'], 'getSavedCoverageForDate_');
+const savedCoverageReader = functionBodyAny('getSavedCoverageForDate_');
 assert(
   savedCoverageReader.includes("readSheetObjects_('Coverage Output')"),
   'saved-plan reload must read durable Coverage Output rather than _Preview'
@@ -174,22 +215,22 @@ assert(
   'Generate must prepare the bounded browser reassignment workspace'
 );
 
-const liveContext = functionBody(sources['scheduler.gs'], 'buildCoverageLiveContext_');
+const liveContext = functionBodyAny('buildCoverageLiveContext_');
 assert(
   liveContext.includes('teacherScheduleRowsForDate_'),
   'save/manual validation must use the weekday schedule cache'
 );
 
-const dayCacheReader = functionBody(sources['scheduler.gs'], 'readTeacherScheduleDayCached_');
+const dayCacheReader = functionBodyAny('readTeacherScheduleDayCached_');
 assert(
   dayCacheReader.includes('rebuildTeacherScheduleDayCache_'),
   'weekday schedule cache must self-heal when stale'
 );
 
-const dayCacheBuilder = functionBody(sources['scheduler.gs'], 'rebuildTeacherScheduleDayCache_');
+const dayCacheBuilder = functionBodyAny('rebuildTeacherScheduleDayCache_');
 assert(
   dayCacheBuilder.includes("Math.min(8, sheet.getLastColumn())") ||
-  sources['scheduler.gs'].includes("Math.min(8, sheet.getLastColumn())"),
+  combined.includes("Math.min(8, sheet.getLastColumn())"),
   'schedule cache source read must exclude the unused Lead/Co formula column'
 );
 assert(
@@ -213,7 +254,7 @@ assert(
   'Class Schedule cache must pre-resolve teacher names'
 );
 
-const poolRefresh = functionBody(sources['scheduler.gs'], 'ensureFieldTripCoveragePoolFresh_');
+const poolRefresh = functionBodyAny('ensureFieldTripCoveragePoolFresh_');
 assert(
   poolRefresh.includes('withCoverageLock_'),
   'full field-trip pool rebuild must be serialized'
@@ -223,7 +264,7 @@ assert(
   'full field-trip pool rebuild must re-check freshness'
 );
 
-const datePoolRefresh = functionBody(sources['scheduler.gs'], 'fieldTripCoveragePoolRowsForDate_');
+const datePoolRefresh = functionBodyAny('fieldTripCoveragePoolRowsForDate_');
 assert(
   datePoolRefresh.includes('withCoverageLock_'),
   'interactive date pool refresh must be serialized'
@@ -237,7 +278,7 @@ assert(
   'interactive Generate must not trigger a full-workbook pool rebuild'
 );
 
-const fastPoolRead = functionBody(sources['scheduler.gs'], 'readFieldTripCoveragePoolRowsForDateFast_');
+const fastPoolRead = functionBodyAny('readFieldTripCoveragePoolRowsForDateFast_');
 assert(
   datePoolRefresh.includes('readFieldTripCoveragePoolRowsForDateFast_'),
   'fresh field-trip pool reads must be date-scoped'
@@ -247,7 +288,7 @@ assert(
   'date-scoped field-trip pool reader must scan only the Date column before reading matching rows'
 );
 
-const targetedPoolRebuild = functionBody(sources['scheduler.gs'], 'rebuildFieldTripCoveragePoolForDate_');
+const targetedPoolRebuild = functionBodyAny('rebuildFieldTripCoveragePoolForDate_');
 assert(
   targetedPoolRebuild.includes('getFieldTripsForDate_'),
   'targeted pool rebuild must limit itself to field trips active on the requested date'
@@ -400,7 +441,7 @@ const schedulerFactory = new Function(
   'PropertiesService',
   'CacheService',
   'LockService',
-  sources['scheduler.gs'] + `
+  combined + `
     return {
       displayTimeToMinutes_,
       inferGradeFromClass_,
