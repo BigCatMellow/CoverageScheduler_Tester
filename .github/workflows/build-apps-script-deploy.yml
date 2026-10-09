@@ -1,0 +1,38 @@
+name: Build Apps Script Deploy Bundle
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+
+      - name: Run Apps Script smoke tests
+        run: node tests/apps-script-smoke.js
+
+      - name: Build manual Apps Script bundle
+        run: node scripts/build-apps-script-deploy.js
+
+      - name: Upload copy-ready Apps Script bundle
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-scheduler-apps-script
+          path: apps-script-deploy/
+          if-no-files-found: error
