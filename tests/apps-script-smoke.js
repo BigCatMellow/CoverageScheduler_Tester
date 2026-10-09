@@ -9,7 +9,15 @@ const gasDir = path.join(root, 'google-apps-script');
 const serverFiles = [
   'code.gs',
   'setup.gs',
+  'coverage-foundation.gs',
+  'field-trips.gs',
+  'schedule-cache.gs',
+  'coverage-staff.gs',
+  'field-trip-pool.gs',
+  'manual-coverage.gs',
+  'coverage-assignment.gs',
   'scheduler.gs',
+  'coverage-save.gs',
   'teacher-schedule-adapter.gs',
   'class-schedule.gs',
   'web-ui-data.gs',
@@ -79,6 +87,18 @@ function functionBody(source, name) {
   return source.slice(start, next < 0 ? source.length : next);
 }
 
+function sourceForFunction(name) {
+  const entry = Object.entries(sources).find(([, source]) =>
+    source.includes('function ' + name + '(')
+  );
+  assert(entry, 'Missing server function ' + name);
+  return entry[1];
+}
+
+function functionBodyAny(name) {
+  return functionBody(sourceForFunction(name), name);
+}
+
 const bootstrap = functionBody(sources['code.gs'], 'getCoverageBootstrap_');
 assert(
   !bootstrap.includes('getFieldTripCoverageStaffForDate_'),
@@ -138,7 +158,7 @@ assert(
   'latest-preview handout creation must revalidate before printing'
 );
 
-const savedCoverageReader = functionBody(sources['scheduler.gs'], 'getSavedCoverageForDate_');
+const savedCoverageReader = functionBodyAny('getSavedCoverageForDate_');
 assert(
   savedCoverageReader.includes("readSheetObjects_('Coverage Output')"),
   'saved-plan reload must read durable Coverage Output rather than _Preview'
@@ -174,22 +194,22 @@ assert(
   'Generate must prepare the bounded browser reassignment workspace'
 );
 
-const liveContext = functionBody(sources['scheduler.gs'], 'buildCoverageLiveContext_');
+const liveContext = functionBodyAny('buildCoverageLiveContext_');
 assert(
   liveContext.includes('teacherScheduleRowsForDate_'),
   'save/manual validation must use the weekday schedule cache'
 );
 
-const dayCacheReader = functionBody(sources['scheduler.gs'], 'readTeacherScheduleDayCached_');
+const dayCacheReader = functionBodyAny('readTeacherScheduleDayCached_');
 assert(
   dayCacheReader.includes('rebuildTeacherScheduleDayCache_'),
   'weekday schedule cache must self-heal when stale'
 );
 
-const dayCacheBuilder = functionBody(sources['scheduler.gs'], 'rebuildTeacherScheduleDayCache_');
+const dayCacheBuilder = functionBodyAny('rebuildTeacherScheduleDayCache_');
 assert(
   dayCacheBuilder.includes("Math.min(8, sheet.getLastColumn())") ||
-  sources['scheduler.gs'].includes("Math.min(8, sheet.getLastColumn())"),
+  combined.includes("Math.min(8, sheet.getLastColumn())"),
   'schedule cache source read must exclude the unused Lead/Co formula column'
 );
 assert(
@@ -213,7 +233,7 @@ assert(
   'Class Schedule cache must pre-resolve teacher names'
 );
 
-const poolRefresh = functionBody(sources['scheduler.gs'], 'ensureFieldTripCoveragePoolFresh_');
+const poolRefresh = functionBodyAny('ensureFieldTripCoveragePoolFresh_');
 assert(
   poolRefresh.includes('withCoverageLock_'),
   'full field-trip pool rebuild must be serialized'
@@ -223,7 +243,7 @@ assert(
   'full field-trip pool rebuild must re-check freshness'
 );
 
-const datePoolRefresh = functionBody(sources['scheduler.gs'], 'fieldTripCoveragePoolRowsForDate_');
+const datePoolRefresh = functionBodyAny('fieldTripCoveragePoolRowsForDate_');
 assert(
   datePoolRefresh.includes('withCoverageLock_'),
   'interactive date pool refresh must be serialized'
@@ -237,7 +257,7 @@ assert(
   'interactive Generate must not trigger a full-workbook pool rebuild'
 );
 
-const fastPoolRead = functionBody(sources['scheduler.gs'], 'readFieldTripCoveragePoolRowsForDateFast_');
+const fastPoolRead = functionBodyAny('readFieldTripCoveragePoolRowsForDateFast_');
 assert(
   datePoolRefresh.includes('readFieldTripCoveragePoolRowsForDateFast_'),
   'fresh field-trip pool reads must be date-scoped'
@@ -247,7 +267,7 @@ assert(
   'date-scoped field-trip pool reader must scan only the Date column before reading matching rows'
 );
 
-const targetedPoolRebuild = functionBody(sources['scheduler.gs'], 'rebuildFieldTripCoveragePoolForDate_');
+const targetedPoolRebuild = functionBodyAny('rebuildFieldTripCoveragePoolForDate_');
 assert(
   targetedPoolRebuild.includes('getFieldTripsForDate_'),
   'targeted pool rebuild must limit itself to field trips active on the requested date'
@@ -400,7 +420,7 @@ const schedulerFactory = new Function(
   'PropertiesService',
   'CacheService',
   'LockService',
-  sources['scheduler.gs'] + `
+  combined + `
     return {
       displayTimeToMinutes_,
       inferGradeFromClass_,
