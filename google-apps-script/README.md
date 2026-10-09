@@ -99,7 +99,7 @@ You do **not** need to manually edit `Coverage Staff` for normal use. Open the w
 4. Deploy and authorize the requested Google Sheets/Docs/Drive permissions.
 5. Open the generated `/exec` URL.
 
-When updating an existing installation, keep the browser and server files in sync. The scheduling engine is intentionally split across focused sibling `.gs` modules that share one Apps Script global namespace, so deploy the entire `google-apps-script/` set together rather than copying individual server files. The web app now checks a server API version during startup and refuses to run a mixed deployment.
+For normal manual updates, **do not copy the modular source files one by one**. GitHub Actions now builds a copy-ready artifact named `coverage-scheduler-apps-script` after every push to `main`. Download that artifact and replace only `CoverageScheduler.gs`, `index.html`, and `appsscript.json` in Apps Script. See [APPS-SCRIPT-MANUAL-DEPLOY.md](../docs/APPS-SCRIPT-MANUAL-DEPLOY.md). The modular files in this folder remain the maintainable source of truth.
 
 The web UI supports the normal workflow: choose a date, add/edit absences, create/edit/remove coverage staff, toggle daily coverage availability, generate the plan, inspect Timeline/Table/By Sub views, and manually reassign blocks. **Save Plan** persists the exact reviewed plan to `Coverage Output`. **Create Handout** now persists that same reviewed plan first and only then creates the handout, so a generated handout always has reloadable saved coverage behind it. Returning to that date reloads the durable saved rows from `Coverage Output`; unsaved generated plans remain browser-only and are intentionally not restored from `_Preview`.
 
