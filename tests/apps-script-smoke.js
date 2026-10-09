@@ -112,6 +112,21 @@ assert(
   'web Generate must explicitly disable shared preview persistence'
 );
 
+const combinedHandoutWeb = functionBody(sources['code.gs'], 'webSaveCoverageAndCreateHandout');
+assert(
+  combinedHandoutWeb.indexOf('saveCoveragePlan({ rows: planRows })') <
+    combinedHandoutWeb.indexOf('createCoverageHandoutPackage_'),
+  'Create Handout must persist the reviewed plan before generating documents'
+);
+assert(
+  index.includes("gas('webSaveCoverageAndCreateHandout',S.plan)"),
+  'browser Create Handout must use the save-first handout endpoint'
+);
+assert(
+  !index.includes("async function createHandout(){try{const r=await gas('webCreateHandoutFromRows',S.plan)"),
+  'browser Create Handout must not use the print-only endpoint'
+);
+
 const handoutWeb = functionBody(sources['code.gs'], 'webCreateHandoutFromRows');
 assert(
   handoutWeb.includes('validateCoveragePlanForSave_'),
