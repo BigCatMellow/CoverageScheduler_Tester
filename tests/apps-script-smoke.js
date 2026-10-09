@@ -59,6 +59,37 @@ scriptBlocks.forEach((script, i) => {
   assert.doesNotThrow(() => new Function(script), 'expanded index.html script block ' + (i + 1) + ' must parse');
 });
 
+// The operator deploys a generated three-file bundle rather than recreating
+// every source module in Apps Script by hand. Verify that bundle in memory.
+const deployBuilder = require('../scripts/build-apps-script-deploy.js');
+const deployBundle = deployBuilder.buildAll();
+assert.deepStrictEqual(
+  Object.keys(deployBundle).sort(),
+  ['CoverageScheduler.gs', 'README.txt', 'appsscript.json', 'index.html'].sort(),
+  'manual Apps Script bundle must contain the expected copy-ready files'
+);
+assert.doesNotThrow(
+  () => new vm.Script(deployBundle['CoverageScheduler.gs'], { filename: 'CoverageScheduler.gs' }),
+  'bundled CoverageScheduler.gs must parse as one Apps Script file'
+);
+assert(
+  !deployBundle['index.html'].includes('<?!= includeCoveragePartial_'),
+  'bundled index.html must have all UI partials inlined'
+);
+const bundledScripts = [...deployBundle['index.html'].matchAll(/<script>([\s\S]*?)<\/script>/g)]
+  .map(match => match[1]);
+assert(bundledScripts.length > 0, 'bundled index.html must contain browser JavaScript');
+bundledScripts.forEach((script, i) => {
+  assert.doesNotThrow(
+    () => new Function(script),
+    'bundled index.html script block ' + (i + 1) + ' must parse'
+  );
+});
+assert.doesNotThrow(
+  () => JSON.parse(deployBundle['appsscript.json']),
+  'bundled appsscript.json must be valid JSON'
+);
+
 function numericConst(source, pattern, label) {
   const match = source.match(pattern);
   assert(match, 'Missing ' + label);
