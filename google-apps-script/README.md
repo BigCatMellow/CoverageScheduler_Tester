@@ -12,7 +12,13 @@ For a complete first-time-user walkthrough, start with [`docs/wiki/Home.md`](../
 - `web-ui-data.gs` — Staff List roster adapter and coverage-team create/edit/remove functions
 - `handout.gs` — full-width, print-friendly Google Docs coverage handouts
 - `field-trip-ui.gs` — field trip editor, monthly calendar, and event UI
-- `index.html` — full-page Coverage Scheduler interface
+- `index.html` — thin full-page web-app shell
+- `styles.html` — full-page interface styles
+- `ui-core.html` — browser state, RPC helpers, schedule helpers, bootstrap, and base rendering
+- `ui-plan.html` — Timeline/Table/By Sub plan rendering
+- `ui-people.html` — absence and Coverage Staff editing workflows
+- `ui-manual.html` — manual block reassignment UI
+- `ui-actions.html` — generate/save/handout actions and event binding
 - `teacher-schedule-adapter.gs` — preserves and validates the existing Teacher Schedule source
 - `setup.gs` — managed workbook sheets, validation, and defaults
 - `scheduler.gs` — top-level generation orchestration
@@ -69,6 +75,12 @@ If `Staff List` does not exist or is empty, setup creates it and seeds unique te
    - `scheduler.gs`
    - `coverage-save.gs`
    - `index.html`
+   - `styles.html`
+   - `ui-core.html`
+   - `ui-plan.html`
+   - `ui-people.html`
+   - `ui-manual.html`
+   - `ui-actions.html`
    - `sidebar.html`
    - `sidebarcss.html`
    - `sidebarjs.html`
