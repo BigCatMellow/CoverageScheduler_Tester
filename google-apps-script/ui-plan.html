@@ -1,0 +1,157 @@
+// Coverage-plan grouping and Timeline/Table/By Sub rendering.
+
+function tripForPlanRow(row){
+  const eventId=String(row&&row.Event_ID||'').trim();
+  if(!eventId)return null;
+  return (S.fieldTrips||[]).find(t=>String(t.eventId||'')===eventId)||null;
+}
+
+function planTripWindow(trip){
+  if(!trip)return'';
+  const startDate=trip.startDate||trip.date||'',endDate=trip.endDate||startDate,active=trip.activeDate||S.date;
+  if(startDate===endDate)return (trip.start||'')+'–'+(trip.end||'');
+  if(active===startDate)return 'Departs '+(trip.start||'');
+  if(active===endDate)return 'Returns '+(trip.end||'');
+  return 'Overnight · all day';
+}
+
+function planSections(){
+  const regular={key:'regular',type:'regular',title:'Regular Coverage',meta:'',items:[]};
+  const byEvent={},eventOrder=[];
+  (S.plan||[]).forEach((r,i)=>{
+    const eventId=String(r.Event_ID||'').trim();
+    if(!eventId){regular.items.push({r,i});return}
+    if(!byEvent[eventId]){
+      const trip=tripForPlanRow(r);
+      const grades=trip&&trip.grades&&trip.grades.length?'Grades '+trip.grades.join(', '):'';
+      const window=trip?planTripWindow(trip):'';
+      byEvent[eventId]={
+        key:'ft:'+eventId,
+        type:'field-trip',
+        title:trip&&trip.name?trip.name:'Field Trip',
+        meta:[grades,window].filter(Boolean).join(' · '),
+        eventId:eventId,
+        items:[]
+      };
+      eventOrder.push(eventId);
+    }
+    byEvent[eventId].items.push({r,i});
+  });
+  const sections=[];
+  if(regular.items.length)sections.push(regular);
+  eventOrder.forEach(id=>sections.push(byEvent[id]));
+  return sections;
+}
+
+function planSectionHeader(section,showRegular){
+  if(section.type==='regular'&&!showRegular)return'';
+  const badge=section.type==='field-trip'
+    ?'<span class="plan-source-badge field-trip">Field Trip</span>'
+    :'<span class="plan-source-badge">Coverage</span>';
+  return '<div class="plan-group-hd">'+badge+
+    '<span class="plan-group-title">'+esc(section.title)+'</span>'+
+    (section.meta?'<span class="plan-group-meta">'+esc(section.meta)+'</span>':'')+
+    '</div>';
+}
+
+function renderPlan(){
+  if(S.generating){
+    $('planBody').innerHTML='<div class="empty"><div class="spinner"></div><h3>Generating coverage plan…</h3><p>Matching absent blocks to the available coverage team.</p></div>';
+    return;
+  }
+  if(!S.plan.length){
+    $('planBody').innerHTML='<div class="empty"><div class="empty-ico">▦</div><h3>No plan generated yet</h3><p>Add absences, confirm who is available on the right, then click <strong>Generate Plan</strong>.</p></div>';
+    return;
+  }
+  if(S.view==='table')renderTable();
+  else if(S.view==='subs')renderBySub();
+  else renderTimeline();
+}
+
+function renderTableSection(section,showRegular){
+  const rows=section.items.slice().sort((a,b)=>
+    mins(a.r.Start)-mins(b.r.Start)||
+    mins(a.r.End)-mins(b.r.End)||
+    String(a.r.Absent_Staff||'').localeCompare(String(b.r.Absent_Staff||''))
+  );
+  return '<div class="plan-group">'+planSectionHeader(section,showRegular)+
+    '<table class="plan-tbl"><thead><tr><th>Time</th><th>Absent</th><th>Class</th><th>Subject</th><th>Room</th><th>Coverage</th><th>Status</th></tr></thead><tbody>'+
+    rows.map(x=>{
+      const r=x.r;
+      return '<tr class="'+(r.Status==='Assigned'?'':'uf')+'" data-block="'+x.i+'" tabindex="0" role="button" title="Click to change coverage">'+
+        '<td class="mono">'+esc(timeDisplay(r.Start))+'–'+esc(timeDisplay(r.End))+'</td>'+
+        '<td>'+esc(r.Absent_Staff)+'</td>'+
+        '<td>'+esc(r.Class||'')+'</td>'+
+        '<td>'+esc(r.Subject||r.Assignment_Type||'')+'</td>'+
+        '<td>'+esc(r.Room||'')+'</td>'+
+        '<td>'+esc(r.Assigned_Coverage||'—')+'</td>'+
+        '<td><span class="sp '+(r.Status==='Assigned'?'sp-ok':'sp-bad')+'">'+esc(r.Status||'Unfilled')+'</span></td>'+
+      '</tr>';
+    }).join('')+
+    '</tbody></table></div>';
+}
+
+function renderTable(){
+  const sections=planSections(),showRegular=sections.some(s=>s.type==='field-trip');
+  $('planBody').innerHTML=sections.map(section=>renderTableSection(section,showRegular)).join('');
+}
+
+function mins(v){
+  const m=String(v||'').match(/^(\d{1,2}):(\d{2})\s*(AM|PM)?$/i);
+  if(!m)return 450;
+  let h=+m[1];
+  if((m[3]||'').toUpperCase()==='PM'&&h<12)h+=12;
+  if((m[3]||'').toUpperCase()==='AM'&&h===12)h=0;
+  return h*60+(+m[2]);
+}
+const TL_START=450,TL_END=960,TL_SPAN=TL_END-TL_START;
+const pct=v=>Math.max(0,Math.min(100,(mins(v)-TL_START)/TL_SPAN*100));
+
+function renderTimelineSection(section,showRegular){
+  const groups={};
+  section.items.forEach(x=>(groups[x.r.Absent_Staff]||(groups[x.r.Absent_Staff]=[])).push(x));
+  const ticks=[480,540,600,660,720,780,840,900].map(m=>
+    '<span class="tl-tick" style="left:'+((m-TL_START)/TL_SPAN*100)+'%">'+
+    (m===720?'12p':m<720?(m/60)+'a':((m/60)-12)+'p')+'</span>'
+  ).join('');
+  let html='<div class="plan-group">'+planSectionHeader(section,showRegular)+'<div class="tl-axis">'+ticks+'</div>';
+  Object.keys(groups).sort().forEach(name=>{
+    html+='<div class="tl-group"><div class="tl-group-lbl">'+esc(name)+'</div>';
+    groups[name].sort((a,b)=>mins(a.r.Start)-mins(b.r.Start)).forEach(x=>{
+      const r=x.r,left=pct(r.Start),width=Math.max(1,pct(r.End)-left);
+      html+='<div class="tl-row"><div class="tl-lbl"><div class="tl-lbl-name">'+esc(r.Class||r.Subject||r.Assignment_Type)+'</div>'+
+        '<div class="tl-lbl-sub">'+esc(timeDisplay(r.Start))+' · '+esc(r.Assigned_Coverage||'Unfilled')+'</div></div>'+
+        '<div class="tl-track">'+[480,540,600,660,720,780,840,900].map(m=>'<span class="tl-hr" style="left:'+((m-TL_START)/TL_SPAN*100)+'%"></span>').join('')+
+        '<div class="tl-blk '+(r.Status==='Assigned'?'assigned':'unfilled')+'" data-block="'+x.i+'" tabindex="0" role="button" style="left:'+left+'%;width:'+width+'%" title="'+esc('Click to change coverage · '+(r.Assigned_Coverage||'Unfilled')+' · '+(r.Subject||''))+'">'+esc(r.Assigned_Coverage||'Unfilled')+'</div></div></div>';
+    });
+    html+='</div>';
+  });
+  return html+'</div>';
+}
+
+function renderTimeline(){
+  const sections=planSections(),showRegular=sections.some(s=>s.type==='field-trip');
+  $('planBody').innerHTML=sections.map(section=>renderTimelineSection(section,showRegular)).join('');
+}
+
+function renderBySubSection(section,showRegular){
+  const groups={};
+  section.items.forEach(x=>{
+    const key=x.r.Assigned_Coverage||'UNFILLED';
+    (groups[key]||(groups[key]=[])).push(x);
+  });
+  return '<div class="plan-group">'+planSectionHeader(section,showRegular)+
+    Object.keys(groups).sort((a,b)=>a==='UNFILLED'?1:b==='UNFILLED'?-1:a.localeCompare(b)).map(name=>
+      '<div class="sub-card"><div class="sub-card-hd"><strong>'+esc(name==='UNFILLED'?'Unfilled Coverage':name)+'</strong>'+
+      '<span>'+groups[name].length+' block'+(groups[name].length===1?'':'s')+'</span></div>'+
+      groups[name].sort((a,b)=>mins(a.r.Start)-mins(b.r.Start)).map(x=>
+        '<div class="sub-row" data-block="'+x.i+'" tabindex="0" role="button" title="Click to change coverage"><span class="mono sub-time">'+esc(timeDisplay(x.r.Start))+'–'+esc(timeDisplay(x.r.End))+'</span>'+
+        '<span>'+esc(x.r.Absent_Staff)+'</span><span>'+esc(x.r.Class||x.r.Subject||'')+'</span><span>'+esc(x.r.Room||'')+'</span></div>'
+      ).join('')+'</div>'
+    ).join('')+'</div>';
+}
+
+function renderBySub(){
+  const sections=planSections(),showRegular=sections.some(s=>s.type==='field-trip');
+  $('planBody').innerHTML=sections.map(section=>renderBySubSection(section,showRegular)).join('');
+}
