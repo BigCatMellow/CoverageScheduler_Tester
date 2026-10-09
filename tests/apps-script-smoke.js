@@ -6,24 +6,9 @@ const assert = require('assert');
 
 const root = path.resolve(__dirname, '..');
 const gasDir = path.join(root, 'google-apps-script');
-const serverFiles = [
-  'code.gs',
-  'setup.gs',
-  'coverage-foundation.gs',
-  'field-trips.gs',
-  'schedule-cache.gs',
-  'coverage-staff.gs',
-  'field-trip-pool.gs',
-  'manual-coverage.gs',
-  'coverage-assignment.gs',
-  'scheduler.gs',
-  'coverage-save.gs',
-  'teacher-schedule-adapter.gs',
-  'class-schedule.gs',
-  'web-ui-data.gs',
-  'field-trip-ui.gs',
-  'handout.gs'
-];
+const serverFiles = fs.readdirSync(gasDir)
+  .filter(name => name.endsWith('.gs'))
+  .sort();
 
 function read(name) {
   return fs.readFileSync(path.join(gasDir, name), 'utf8');
