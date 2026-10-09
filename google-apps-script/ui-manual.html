@@ -1,0 +1,106 @@
+// Manual block reassignment modal and local plan updates.
+
+async function openBlock(index){
+  const r=S.plan[index];
+  if(!r)return;
+  S.editingBlock=index;
+  $('blockInfo').innerHTML='<strong>'+esc(r.Class||r.Subject||r.Assignment_Type)+' — '+esc(r.Absent_Staff)+'</strong><div>'+esc(timeDisplay(r.Start))+' – '+esc(timeDisplay(r.End))+' · '+esc(r.Room||'No room')+'</div>'+(r.Notes?'<div class="block-reason">'+esc(r.Notes)+'</div>':'');
+  $('blockCoverage').disabled=true;
+  $('saveBlockBtn').disabled=true;
+  $('blockCoverage').innerHTML='<option value="">Loading available staff…</option>';
+  $('blockCoverageSchedule').innerHTML='';
+  $('blockCoverageHint').textContent='Checking live absences, field trips, schedules, and existing coverage assignments…';
+  showModal('blockModal');
+
+  try{
+    const workspace=S.manualWorkspace;
+    const cached=workspace&&workspace.date===S.date&&workspace.day===S.day&&workspace.blocks&&workspace.blocks[index];
+    const result=cached
+      ? Object.assign({},cached,{schedules:workspace.schedules||{}})
+      : await gas('webGetManualCoverageChoices',{
+          date:S.date,
+          day:S.day,
+          rows:S.plan,
+          blockIndex:index
+        });
+    if(S.editingBlock!==index)return;
+    S.blockChoiceResult=result||null;
+
+    const choices=(result&&result.choices)||[];
+    let html='<option value="">— Leave unfilled —</option>';
+    const groups=['Field Trip Pool','Coverage Staff','Available Staff','Subs'];
+
+    groups.forEach(group=>{
+      const rows=choices.filter(c=>c.source===group);
+      if(!rows.length)return;
+      html+='<optgroup label="'+esc(group)+'">';
+      rows.forEach(choice=>{
+        const detail=(choice.source==='Coverage Staff'||choice.source==='Subs')&&choice.tier?' · Tier '+choice.tier:'';
+        html+='<option value="'+esc(choice.name)+'">'+esc(choice.name+detail)+'</option>';
+      });
+      html+='</optgroup>';
+    });
+
+    $('blockCoverage').innerHTML=html;
+    $('blockCoverage').disabled=false;
+    $('saveBlockBtn').disabled=false;
+    S.blockSchedules=(result&&result.schedules)||{};
+
+    const current=r.Assigned_Coverage||'';
+    if(current&&choices.some(choice=>choice.name===current)){
+      $('blockCoverage').value=current;
+    }else if(current){
+      const unavailable=document.createElement('option');
+      unavailable.value=current;
+      unavailable.textContent=current+' — currently unavailable';
+      unavailable.disabled=true;
+      unavailable.selected=true;
+      $('blockCoverage').insertBefore(unavailable,$('blockCoverage').firstChild);
+    }else{
+      $('blockCoverage').value='';
+    }
+    renderCandidateMiniSchedule($('blockCoverage').value);
+
+    const absentCount=((result&&result.excludedAbsentNames)||[]).length;
+    $('blockCoverageHint').textContent=
+      'Only people available for this exact block are shown. '+
+      'Absent staff, staff on the trip, schedule conflicts, and people already covering another block at this time are excluded.'+
+      (absentCount?' '+absentCount+' otherwise possible staff member'+(absentCount===1?' is':'s are')+' absent during this block.':'');
+  }catch(e){
+    $('blockCoverage').innerHTML='<option value="">Unable to load choices</option>';
+    $('blockCoverageSchedule').innerHTML='';
+    $('blockCoverageHint').textContent=e.message||String(e);
+    fail(e);
+  }
+}
+
+function saveBlock(){
+  const i=S.editingBlock;
+  if(i==null)return;
+  const r=S.plan[i];
+  const name=$('blockCoverage').value;
+  const result=S.blockChoiceResult||{};
+  const choice=name?(result.choices||[]).find(item=>item.name===name):null;
+
+  if(name&&!choice){
+    flash(name+' is not in the current available-staff list. Reopen this block to refresh availability.','warn');
+    return;
+  }
+
+  r.Assigned_Coverage=name||'';
+  r.Status=name?'Assigned':'Unfilled';
+  r.Coverage_Mode=name?'Manual':'';
+  r.Coverage_Tier_Used=choice&&choice.tier!=null?String(choice.tier||''):'';
+  r.Notes=name
+    ? 'Manually assigned. '+(choice&&choice.reason?choice.reason:'Selected from the live available-staff list.')
+    : 'Manually left unfilled.';
+
+  // Choices for other blocks depend on the current plan assignments. Discard
+  // the generated workspace after a manual change; the next block gets a fresh
+  // live server check. Final Save Plan / Create Handout revalidate everything.
+  S.manualWorkspace=null;
+  S.blockChoiceResult=null;
+  closeModal('blockModal');
+  renderAll();
+  flash(name?'Block assigned to '+name+'.':'Block marked unfilled.','ok');
+}
