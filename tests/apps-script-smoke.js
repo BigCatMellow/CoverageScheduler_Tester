@@ -339,6 +339,27 @@ assert(
   'browser must retain the generated manual-choice workspace'
 );
 assert(
+  index.includes('.sub-row:hover,.sub-row:focus-visible') &&
+  index.includes('.sub-time{'),
+  'By Sub rows must visibly advertise that coverage blocks are interactive'
+);
+assert(
+  index.includes('title="Click to change coverage"') &&
+  index.includes('tabindex="0" role="button"'),
+  'clickable coverage blocks must expose an interaction cue and keyboard focus'
+);
+assert(
+  index.includes("$('planBody').addEventListener('keydown'") &&
+  index.includes("e.key!=='Enter'&&e.key!==' '"),
+  'coverage blocks must support Enter/Space activation'
+);
+assert(
+  index.includes('.tl-blk:hover,.tl-blk:focus-visible') &&
+  index.includes('.plan-tbl tbody tr:hover td'),
+  'timeline and table coverage blocks must have hover feedback'
+);
+
+assert(
   index.includes('(data.dayStaffSchedules||[]).forEach'),
   'browser must hydrate its local staff schedule cache from bootstrap'
 );
